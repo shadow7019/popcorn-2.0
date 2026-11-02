@@ -8,8 +8,9 @@
 #   bash scripts/push-github.sh                 # SSH deploy-key path
 #   bash scripts/push-github.sh --token <PAT>   # HTTPS fine-grained PAT path
 #
-# One-time setup for the SSH path: add .ssh-deploy/id_ed25519.pub as a
-# Deploy key (Settings → Deploy keys → allow write) on shadow7019/OTAMA.
+# One-time setup for the SSH path: the .ssh-deploy/id_ed25519.pub key is
+# registered on the shadow7019 GitHub account (Settings → SSH keys), which
+# authorizes it for every repo under the account, OTAMA included.
 set -euo pipefail
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT"
@@ -20,8 +21,8 @@ if [ "${1:-}" = "--token" ]; then
   git push "https://x-access-token:${2}@github.com/shadow7019/OTAMA.git" \
     "main:refs/heads/${REMOTE_BRANCH}"
 else
-  GIT_SSH_COMMAND="$PROJECT/.ssh-deploy/bin/ssh -i $PROJECT/.ssh-deploy/id_ed25519 \
--o IdentitiesOnly=yes -o UserKnownHostsFile=$PROJECT/.ssh-deploy/known_hosts \
--o StrictHostKeyChecking=yes" \
+  # No ssh binary exists in this sandbox; git uses the paramiko transport
+  # wrapper (same one push-popcorn2.sh uses).
+  GIT_SSH_COMMAND="python3 $PROJECT/scripts/git-ssh-paramiko.py" \
     git push "git@github.com:shadow7019/OTAMA.git" "main:refs/heads/${REMOTE_BRANCH}"
 fi
