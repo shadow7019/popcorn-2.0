@@ -13,7 +13,18 @@ import os
 import select
 import sys
 
-import paramiko
+# The sandbox recycle wipes pip packages (they live outside the project dir);
+# self-heal instead of failing the first push after every restart.
+try:
+    import paramiko
+except ModuleNotFoundError:
+    import subprocess
+
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--quiet", "paramiko"],
+        check=True,
+    )
+    import paramiko
 
 _PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEY = os.environ.get("GIT_SSH_KEY", os.path.join(_PROJECT, ".ssh-deploy/id_ed25519"))
