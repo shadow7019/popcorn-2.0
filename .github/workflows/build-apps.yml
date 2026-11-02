@@ -1,4 +1,4 @@
-# Builds the Popcorn Time native shells for all three targets on their proper
+# Builds the PopcornTime native shells for all three targets on their proper
 # runners. Trigger manually (workflow_dispatch) or by pushing a v* tag.
 #
 #   android  → PopcornTime-debug.apk      (Capacitor, any Android 6+ device)
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   android:
-    name: Android APK (Popcorn Time)
+    name: Android APK (PopcornTime)
     runs-on: ubuntu-latest
     defaults:
       run:

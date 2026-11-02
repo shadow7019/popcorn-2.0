@@ -1,6 +1,6 @@
-# Popcorn Time Mobile (Capacitor)
+# PopcornTime Mobile (Capacitor)
 
-Native **Android** and **iOS** app shells around the hosted Popcorn Time web app
+Native **Android** and **iOS** app shells around the hosted PopcornTime web app
 (`https://otama.antideploy.app`). Website updates ship to the installed apps
 automatically; the store binary only changes when the shell config changes.
 
@@ -40,7 +40,7 @@ npm run sync
 npm run open:ios        # opens Xcode
 ```
 
-Then in Xcode: set Team + bundle identifier (`space.otama.app`) under the app
+Then in Xcode: set Team + bundle identifier (`space.popcorntime.app`) under the app
 target, and **Product → Archive** for App Store / TestFlight.
 
 ## Where to change things

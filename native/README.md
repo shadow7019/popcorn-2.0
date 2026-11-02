@@ -1,6 +1,6 @@
-# Popcorn Time Apps — macOS · Windows · Android · iOS
+# PopcornTime Apps — macOS · Windows · Android · iOS
 
-Three ways to get Popcorn Time as an app on every platform. All of them load the same
+Three ways to get PopcornTime as an app on every platform. All of them load the same
 hosted app (`https://otama.antideploy.app` — the deployment that runs the fixed
 streaming engine), so playback, search, subtitles and continue-watching stay
 identical everywhere.
@@ -25,7 +25,7 @@ For most users this is all they need.
 
 | Job | Runner | Artifacts |
 | --- | --- | --- |
-| Android | `ubuntu-latest` | `Popcorn Time-debug.apk` (sideload-ready) |
+| Android | `ubuntu-latest` | `PopcornTime-debug.apk` (sideload-ready) |
 | Windows x64 | `windows-latest` | `*.msi` + `*-setup.exe` (NSIS installer) |
 | macOS Apple Silicon | `macos-14` (M1) | `*.dmg` + `*.app`, aarch64 → M1/M2/M3/M4 |
 
@@ -46,7 +46,7 @@ For **M-chip Macs** specifically:
 ```bash
 cd native/desktop-tauri
 cargo tauri build --target aarch64-apple-darwin
-# → src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Popcorn Time_1.0.0_aarch64.dmg
+# → src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/PopcornTime_1.0.1_aarch64.dmg
 ```
 
 For **Windows x64**:
@@ -54,7 +54,7 @@ For **Windows x64**:
 ```powershell
 cd native\desktop-tauri
 cargo tauri build
-# → src-tauri\target\release\bundle\msi\Popcorn Time_1.0.0_x64_en-US.msi  (+ NSIS -setup.exe)
+# → src-tauri\target\release\bundle\msi\PopcornTime_1.0.1_x64_en-US.msi  (+ NSIS -setup.exe)
 ```
 
 ## 2. Mobile — `mobile-capacitor/` (Capacitor, Android/iOS)

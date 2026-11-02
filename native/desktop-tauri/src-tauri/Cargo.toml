@@ -1,8 +1,8 @@
 [package]
 name = "otama"
 version = "1.0.0"
-description = "Otama — Stream Movies & TV Shows"
-authors = ["Otama"]
+description = "PopcornTime — Stream Movies & TV Shows"
+authors = ["PopcornTime"]
 edition = "2021"
 rust-version = "1.77"
 
