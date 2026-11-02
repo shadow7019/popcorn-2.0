@@ -1,7 +1,7 @@
-# Builds the Otama native shells for all three targets on their proper
+# Builds the Popcorn Time native shells for all three targets on their proper
 # runners. Trigger manually (workflow_dispatch) or by pushing a v* tag.
 #
-#   android  → Otama-debug.apk            (Capacitor, any Android 6+ device)
+#   android  → PopcornTime-debug.apk      (Capacitor, any Android 6+ device)
 #   windows  → .msi / -setup.exe x64      (Tauri, Windows 10/11)
 #   macos    → .dmg / .app aarch64        (Tauri, Apple Silicon M1/M2/M3/M4)
 #
@@ -38,6 +38,8 @@ jobs:
           java-version: 17
       - uses: android-actions/setup-android@v3
       - run: npm ci
+      # android/ is gitignored (generated); recreate it on the runner
+      - run: npx cap add android
       - run: npx cap sync android
       - run: cd android && bash gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
