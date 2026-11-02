@@ -7,7 +7,10 @@ import os
 import sys
 
 DIR = "/home/z/my-project/.ssh-deploy"
-PRIV = os.path.join(DIR, "id_ed25519")
+# optional argv[1] = key filename, e.g. `gen-deploy-key.py id_otama` to mint a
+# second key for a different repo (GitHub allows a deploy key on one repo only)
+KEYNAME = sys.argv[1] if len(sys.argv) > 1 else "id_ed25519"
+PRIV = os.path.join(DIR, KEYNAME)
 PUB = PRIV + ".pub"
 
 os.makedirs(DIR, mode=0o700, exist_ok=True)
