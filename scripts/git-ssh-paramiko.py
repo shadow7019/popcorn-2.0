@@ -10,8 +10,8 @@ Usage:
     git push git@github.com:shadow7019/popcorn-2.0.git main
 """
 import os
+import select
 import sys
-import threading
 
 import paramiko
 
@@ -75,32 +75,38 @@ def main() -> int:
     channel.settimeout(None)
     channel.exec_command(remote_cmd)
 
-    def pump_stdin() -> None:
-        try:
-            while True:
-                data = sys.stdin.buffer.read(32768)
-                if not data:
-                    break
-                channel.sendall(data)
-        except Exception:
-            pass
-        finally:
-            try:
-                channel.shutdown_write()
-            except Exception:
-                pass
-
-    threading.Thread(target=pump_stdin, daemon=True).start()
-
+    # Single-threaded select loop (a daemon stdin-pump thread made Python
+    # abort with a buffered-IO lock error at shutdown).
+    fd0 = sys.stdin.buffer.fileno()
+    stdin_open = True
     while True:
+        rlist = []
+        if stdin_open:
+            rlist.append(fd0)
+        if not channel.closed:
+            rlist.append(channel)
+        if not rlist:
+            break
         try:
+            ready, _, _ = select.select(rlist, [], [], 1.0)
+        except (OSError, ValueError):
+            break
+        if fd0 in ready:
+            data = os.read(fd0, 32768)
+            if data:
+                channel.sendall(data)
+            else:
+                stdin_open = False
+                try:
+                    channel.shutdown_write()
+                except Exception:
+                    pass
+        if channel in ready:
             data = channel.recv(32768)
-        except Exception:
-            break
-        if not data:
-            break
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+            if not data:
+                break
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
     while True:
         try:
             err = channel.recv_stderr(32768)
