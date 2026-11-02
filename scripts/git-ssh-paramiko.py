@@ -33,6 +33,38 @@ KNOWN_HOSTS = os.environ.get(
 )
 
 
+def _restore_key_bundle() -> None:
+    """Recreate .ssh-deploy/ from .env after a sandbox recycle.
+
+    The platform's recycle archive drops untracked dot-dirs like .ssh-deploy
+    (wiping the private key), but preserves .env and .git. The key bundle is
+    stored base64-tar-gzipped in POP_SSH_BUNDLE_B64 and unpacked on demand.
+    """
+    if os.path.exists(KEY):
+        return
+    env_path = os.path.join(_PROJECT, ".env")
+    if not os.path.exists(env_path):
+        return
+    for line in open(env_path, encoding="utf-8"):
+        if not line.startswith("POP_SSH_BUNDLE_B64="):
+            continue
+        blob = line.split("=", 1)[1].strip().strip("'\"")
+        import base64
+        import io
+        import tarfile
+
+        data = base64.b64decode(blob)
+        keydir = os.path.dirname(KEY)
+        os.makedirs(keydir, mode=0o700, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+            tf.extractall(keydir)
+        os.chmod(KEY, 0o600)
+        break
+
+
+_restore_key_bundle()
+
+
 def main() -> int:
     args = sys.argv[1:]
     port = 22
