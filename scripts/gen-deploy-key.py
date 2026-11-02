@@ -18,10 +18,44 @@ if os.path.exists(PRIV):
 import paramiko
 
 try:
+    # Prefer Ed25519: short public key (~100 chars) survives copy-paste into
+    # GitHub's key textarea far better than a multi-hundred-char RSA line.
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    key = Ed25519PrivateKey.generate()
+    priv = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.OpenSSH,
+        serialization.NoEncryption(),
+    )
+    pub = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.OpenSSH,
+            serialization.PublicFormat.OpenSSH,
+        )
+        .decode()
+        .rstrip()
+    )
+    with open(PRIV, "wb") as f:
+        f.write(priv)
+    with open(PUB, "w") as f:
+        f.write(f"{pub} popcorn-2.0-deploy\n")
+    os.chmod(PRIV, 0o600)
+    os.chmod(PUB, 0o644)
+    print(f"generated ed25519 keypair: {PRIV}")
+    sys.exit(0)
+except ImportError:
+    pass  # fall back to paramiko RSA below
+
+try:
     key = paramiko.Ed25519Key.generate()
     ktype = "ed25519"
-except Exception as e:  # very old paramiko: fall back to RSA
-    print(f"Ed25519Key.generate unavailable ({e}); generating RSA-3072")
+except Exception as e:  # older paramiko: fall back to RSA
+    print(f"ed25519 unavailable ({e}); generating RSA-3072")
     key = paramiko.RSAKey.generate(3072)
     ktype = "rsa"
 
