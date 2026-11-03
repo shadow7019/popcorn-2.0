@@ -5,7 +5,7 @@
 #   windows  → .msi / -setup.exe x64      (Tauri, Windows 10/11)
 #   macos    → .dmg / .app aarch64        (Tauri, Apple Silicon M1/M2/M3/M4)
 #
-# All shells wrap https://otama.antideploy.app, so site fixes ship without
+# All shells wrap https://pocorntime.antideploy.app, so site fixes ship without
 # rebuilding these binaries.
 name: build-apps
 

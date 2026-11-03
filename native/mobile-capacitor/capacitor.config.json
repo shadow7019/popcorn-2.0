@@ -3,9 +3,9 @@
   "appName": "PopcornTime",
   "webDir": "www",
   "server": {
-    "url": "https://otama.antideploy.app",
+    "url": "https://pocorntime.antideploy.app",
     "androidScheme": "https",
-    "allowNavigation": ["otama.antideploy.app", "otama2.space-z.ai"]
+    "allowNavigation": ["pocorntime.antideploy.app"]
   },
   "ios": {
     "contentInset": "always"

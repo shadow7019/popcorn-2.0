@@ -1,11 +1,10 @@
 # PopcornTime Mobile (Capacitor)
 
 Native **Android** and **iOS** app shells around the hosted PopcornTime web app
-(`https://otama.antideploy.app`). Website updates ship to the installed apps
+(`https://pocorntime.antideploy.app`). Website updates ship to the installed apps
 automatically; the store binary only changes when the shell config changes.
 `capacitor.config.json` (plain JSON, not TS — the CLI's TS parser breaks with
-modern TypeScript) points at the canonical deployment; `otama2.space-z.ai`
-remains in allowNavigation only as a legacy fallback.
+modern TypeScript) points at the canonical deployment.
 
 ## One-time setup
 

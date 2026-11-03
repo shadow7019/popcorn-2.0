@@ -1,7 +1,7 @@
 # PopcornTime Desktop (Tauri)
 
 Native **macOS / Windows / Linux** app around the hosted PopcornTime web app
-(`https://otama.antideploy.app`). The window is a thin system-webview shell, so
+(`https://pocorntime.antideploy.app`). The window is a thin system-webview shell, so
 app updates ship automatically with the website — the desktop package only
 needs rebuilding when the shell itself changes.
 

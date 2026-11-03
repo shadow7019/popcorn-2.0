@@ -1,14 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PopcornTime",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "space.popcorntime.app",
   "build": {},
   "app": {
     "windows": [
       {
         "title": "PopcornTime",
-        "url": "https://otama.antideploy.app",
+        "url": "https://pocorntime.antideploy.app",
         "width": 1280,
         "height": 760,
         "minWidth": 380,

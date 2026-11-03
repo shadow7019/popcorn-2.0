@@ -1,7 +1,7 @@
 # PopcornTime Apps — macOS · Windows · Android · iOS
 
 Three ways to get PopcornTime as an app on every platform. All of them load the same
-hosted app (`https://otama.antideploy.app` — the deployment that runs the fixed
+hosted app (`https://pocorntime.antideploy.app` — the deployment that runs the fixed
 streaming engine), so playback, search, subtitles and continue-watching stay
 identical everywhere.
 
@@ -73,6 +73,6 @@ iOS requires a Mac with Xcode: `npx cap add ios && npm run open:ios`.
 
 ## Updating
 
-Because every shell just wraps `https://otama.antideploy.app`, site fixes ship
+Because every shell just wraps `https://pocorntime.antideploy.app`, site fixes ship
 to all four platforms instantly — rebuild a shell only for icon/name/config
 changes.
