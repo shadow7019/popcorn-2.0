@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21 # Capacitor 7 / AGP 8.7 require JDK 21
       # no android-actions/setup-android: the ubuntu runner ships a complete
       # SDK, and the action's default `packages: tools platform-tools` now
       # crashes — Google removed the legacy `tools` package from sdkmanager.
