@@ -9,6 +9,7 @@
  * best server automatically.
  */
 import { execFile } from "node:child_process";
+import { clearancedPage } from "./cf-clearance";
 import { getAbsoluteEpisode, getImdbId, getTitleMeta, tmdbServer } from "./tmdb-server";
 import {
   bestTitleMatch,
@@ -817,6 +818,13 @@ async function x1337Page(url: string): Promise<string> {
       { timeout: 12000, maxBuffer: 4 << 20 },
       (err, stdout) => resolve(err ? "" : String(stdout))
     );
+  }).then((curled) => {
+    if (curled && !curled.includes("Just a moment")) return curled;
+    // fetch and curl both got challenged — solve the Cloudflare challenge in
+    // headless Chromium (playwright-core + the platform's /usr/bin/chromium)
+    // and replay the clearance cookie. No-ops to "" where no browser exists,
+    // leaving the provider quietly empty like any dead source.
+    return clearancedPage(url, BROWSER_UA, 12_000);
   });
 }
 
@@ -834,11 +842,15 @@ async function provider1337x(type: "movie" | "tv", ctx: BayContext): Promise<Tor
     (type === "movie" ? `${title} ${year ?? ""}` : `${title} s${pad(season)}e${pad(episode)}`).trim()
   ).replace(/%20/g, "+");
   let html = "";
+  let answeredHost = "";
   for (const host of X1337_HOSTS) {
     html = await x1337Page(`${host}/search/${slug}/1/`);
-    if (html) break;
+    if (html) {
+      answeredHost = host;
+      break;
+    }
   }
-  if (!html) return [];
+  if (!html || !answeredHost) return [];
 
   interface X1337Row {
     href: string;
@@ -876,7 +888,7 @@ async function provider1337x(type: "movie" | "tv", ctx: BayContext): Promise<Tor
   const out: TorrentSource[] = [];
   await mapPool(rows.slice(0, 6), 2, async (row) => {
     if (out.length >= 4) return;
-    const detailHost = X1337_HOSTS[0];
+    const detailHost = answeredHost;
     const page = await x1337Page(`${detailHost}${row.href}`);
     const infoHash = page.match(/magnet:\?xt=urn:btih:([0-9a-fA-F]{40})/)?.[1]?.toLowerCase();
     if (!infoHash) return;
