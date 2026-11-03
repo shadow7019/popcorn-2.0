@@ -68,11 +68,39 @@ function hostOf(url: string): string {
 
 function chromiumPath(): string {
   const fromEnv = process.env.PLAYWRIGHT_CHROMIUM_PATH?.trim();
-  const p = fromEnv || "/usr/bin/chromium";
+  if (fromEnv) return fromEnv;
   try {
-    return require("node:fs").existsSync(p) ? p : "";
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    if (fs.existsSync("/usr/bin/chromium")) return "/usr/bin/chromium";
+    // browsers fetched by `playwright-core install chromium` with
+    // PLAYWRIGHT_BROWSERS_PATH=0 land inside the package — the layout the
+    // runtime bootstrap in this module produces on the deployment
+    const dir = path.join(process.cwd(), "node_modules", "playwright-core", ".local-browsers");
+    if (!fs.existsSync(dir)) return "";
+    // prefer the full chrome binary over the more-detectable headless shell;
+    // layout moved chrome-linux/ → chrome-linux64/ in playwright 1248+
+    for (const pattern of ["chromium-", "chromium_headless_shell-"]) {
+      const versions = fs
+        .readdirSync(dir)
+        .filter((d) => d.startsWith(pattern))
+        .sort()
+        .reverse();
+      for (const v of versions) {
+        for (const bin of [
+          "chrome-linux64/chrome",
+          "chrome-linux/chrome",
+          "chrome-linux64/headless_shell",
+          "chrome-linux/headless_shell",
+        ]) {
+          const p = path.join(dir, v, bin);
+          if (fs.existsSync(p)) return p;
+        }
+      }
+    }
+    return "";
   } catch {
-    return p;
+    return "";
   }
 }
 
