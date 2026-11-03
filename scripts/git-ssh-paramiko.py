@@ -34,32 +34,33 @@ KNOWN_HOSTS = os.environ.get(
 
 
 def _restore_key_bundle() -> None:
-    """Recreate .ssh-deploy/ from .env after a sandbox recycle.
+    """Recreate .ssh-deploy/ after a sandbox recycle.
 
-    The platform's recycle archive drops untracked dot-dirs like .ssh-deploy
-    (wiping the private key), but preserves .env and .git. The key bundle is
-    stored base64-tar-gzipped in POP_SSH_BUNDLE_B64 and unpacked on demand.
+    Everything on disk outside .git dies or is filtered by the platform's
+    recycle archive (repo.tar drops untracked dot-dirs; .env gets regenerated
+    without unknown vars), so the keypair lives in the LOCAL-ONLY orphan
+    branch `local-secrets` — never pushed, never merged: the push scripts
+    move explicit refs only.
     """
     if os.path.exists(KEY):
         return
-    env_path = os.path.join(_PROJECT, ".env")
-    if not os.path.exists(env_path):
-        return
-    for line in open(env_path, encoding="utf-8"):
-        if not line.startswith("POP_SSH_BUNDLE_B64="):
-            continue
-        blob = line.split("=", 1)[1].strip().strip("'\"")
-        import base64
-        import io
-        import tarfile
+    import subprocess
 
-        data = base64.b64decode(blob)
-        keydir = os.path.dirname(KEY)
+    keydir = os.path.dirname(KEY)
+    name = os.path.basename(KEY)
+    for member in (name, name + ".pub"):
+        try:
+            data = subprocess.run(
+                ["git", "-C", _PROJECT, "show",
+                 f"local-secrets:.ssh-deploy/{member}"],
+                capture_output=True, check=True,
+            ).stdout
+        except Exception:
+            continue
         os.makedirs(keydir, mode=0o700, exist_ok=True)
-        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
-            tf.extractall(keydir)
-        os.chmod(KEY, 0o600)
-        break
+        with open(os.path.join(keydir, member), "wb") as f:
+            f.write(data)
+        os.chmod(os.path.join(keydir, member), 0o600)
 
 
 _restore_key_bundle()
