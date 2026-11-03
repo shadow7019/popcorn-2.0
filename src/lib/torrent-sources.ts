@@ -8,6 +8,7 @@
  * series episodes never get mixed) and scored so the player can pick the
  * best server automatically.
  */
+import { execFile } from "node:child_process";
 import { getAbsoluteEpisode, getImdbId, getTitleMeta, tmdbServer } from "./tmdb-server";
 import {
   bestTitleMatch,
@@ -504,17 +505,36 @@ interface ApibayRow {
  * IMDb id, which pins the torrent to the requested title exactly like YTS.
  */
 async function apibayQuery(q: string): Promise<ApibayRow[]> {
+  const url = `https://apibay.org/q.php?q=${encodeURIComponent(q)}`;
+  // apibay's Cloudflare challenges non-browser TLS fingerprints — BOTH undici
+  // (Node) and bun get "Just a moment…" regardless of UA (verified 2026-11-03:
+  // curl answers clean JSON where fetch gets a 5.6 KB challenge page). So the
+  // fetch path is attempted first and, on a challenge, the same request is
+  // retried through curl, whose TLS fingerprint CF reliably lets through.
+  // curl ships in the Debian-based images the site deploys on; when it is
+  // missing the provider simply goes quiet like any other dead source.
+  let text = "";
   try {
-    const res = await pacedFetch(
-      `https://apibay.org/q.php?q=${encodeURIComponent(q)}`,
-      {
-        headers: { accept: "application/json", "user-agent": BROWSER_UA },
-        timeoutMs: 12000,
-      }
-    );
-    if (!res.ok) return [];
-    const text = await res.text();
-    if (!text.trim().startsWith("[")) return []; // CF challenge / HTML error
+    const res = await pacedFetch(url, {
+      headers: { accept: "application/json", "user-agent": BROWSER_UA },
+      timeoutMs: 12000,
+    });
+    if (res.ok) text = await res.text();
+  } catch {
+    // fall through to the curl retry
+  }
+  if (!text.trim().startsWith("[")) {
+    text = await new Promise<string>((resolve) => {
+      execFile(
+        "curl",
+        ["-s", "-m", "12", "-A", BROWSER_UA, "-H", "accept: application/json", url],
+        { timeout: 15000, maxBuffer: 4 << 20 },
+        (err, stdout) => resolve(err ? "" : String(stdout))
+      );
+    });
+  }
+  if (!text.trim().startsWith("[")) return []; // still challenged / HTML error
+  try {
     const rows = JSON.parse(text) as ApibayRow[];
     return Array.isArray(rows) ? rows : [];
   } catch {
