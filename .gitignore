@@ -54,3 +54,4 @@ server.log
 /skills/.torrent-cache/
 .ssh-deploy/
 core
+.ssh-deploy
