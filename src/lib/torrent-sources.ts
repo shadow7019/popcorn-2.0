@@ -688,6 +688,299 @@ async function providerYts(
   return out;
 }
 
+/* ---------- knaben (aggregator over 1337x, TorrentGalaxy, TPB …) ---------- */
+
+interface KnabenRow {
+  title?: string;
+  infoHash?: string;
+  seeders?: number;
+  peers?: number;
+  sizeBytes?: number | string;
+}
+
+/**
+ * Knaben — a public JSON search API over a dozen trackers (1337x,
+ * TorrentGalaxy, TPB mirrors …), so one call covers indexers that each sit
+ * behind their own Cloudflare wall. The service flaps between hosts
+ * (api.knaben.eu 503s while knaben.eu answers); both are tried and the
+ * circuit breaker benches the provider when neither answers.
+ */
+async function knabenSearch(query: string): Promise<KnabenRow[]> {
+  for (const host of ["https://api.knaben.eu", "https://knaben.eu"]) {
+    try {
+      const res = await pacedFetch(`${host}/api/v1/search`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "user-agent": BROWSER_UA,
+        },
+        body: JSON.stringify({ query, limit: 40 }),
+        // two hosts × 5 s keeps the double-retry inside the 10 s provider
+        // deadline — a flapping Knaben must not stretch every search
+        timeoutMs: 5000,
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as { torrents?: KnabenRow[] };
+      const rows = data.torrents;
+      if (Array.isArray(rows) && rows.length) return rows;
+    } catch {
+      // try the next host
+    }
+  }
+  return [];
+}
+
+async function providerKnaben(type: "movie" | "tv", ctx: BayContext): Promise<TorrentSource[]> {
+  const { title, originalTitle, year, season, episode } = ctx;
+  if (!title) return [];
+  const queries =
+    type === "movie"
+      ? [`${title} ${year ?? ""}`.trim()]
+      : [`${title} s${pad(season)}e${pad(episode)}`, `${title} ${year ?? ""}`.trim()];
+  const out: TorrentSource[] = [];
+  const seen = new Set<string>();
+  for (const q of queries) {
+    if (out.length >= 25) break;
+    for (const r of await knabenSearch(q)) {
+      const infoHash = (r.infoHash ?? "").toLowerCase();
+      const name = (r.title ?? "").trim();
+      if (!/^[0-9a-f]{40}$/.test(infoHash) || !name || seen.has(infoHash)) continue;
+      seen.add(infoHash);
+      const p = parseRelease(name);
+      const match =
+        type === "movie"
+          ? matchMovie(p, title, originalTitle, year ?? "")
+          : matchTv(p, season, episode, title, originalTitle, {
+              airDate: ctx.airDate,
+              showLang: ctx.showLang,
+              absEpisode: ctx.absEpisode,
+            });
+      if (!match) continue;
+      if (type === "tv" && countryPenalty(p, ctx.countries) < 0) continue;
+      out.push({
+        id: infoHash,
+        releaseName: name,
+        seeders: Math.max(0, Number(r.seeders) || 0),
+        peers: Math.max(0, Number(r.peers) || 0),
+        sizeBytes: Number(r.sizeBytes) || 0,
+        provider: "Knaben",
+        quality: detectQuality(name),
+        fileIdx: null,
+        match,
+        score: 0,
+      });
+    }
+  }
+  return out;
+}
+
+/* ---------- 1337x (mirror rotation + detail-page magnets) ---------- */
+
+const X1337_HOSTS = [
+  "https://1337x.to",
+  "https://1337xx.to",
+  "https://x1337x.ws",
+  "https://1337x.gd",
+];
+
+function decodeHtml(s: string): string {
+  return s
+    .replace(/&#0?39;|&apos;|&#x27;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/** 1337x pages through fetch first; on a Cloudflare challenge the same URL is
+ *  retried via curl — whose TLS fingerprint CF lets through on several of the
+ *  mirrors (the same trick that keeps apibay alive). */
+async function x1337Page(url: string): Promise<string> {
+  try {
+    const res = await pacedFetch(url, {
+      headers: { accept: "text/html", "user-agent": BROWSER_UA },
+      timeoutMs: 8000,
+    });
+    if (res.ok) {
+      const t = await res.text();
+      if (!t.includes("Just a moment")) return t;
+    }
+  } catch {
+    // fall through to the curl retry
+  }
+  return new Promise<string>((resolve) => {
+    execFile(
+      "curl",
+      ["-sL", "-m", "8", "-A", BROWSER_UA, url],
+      { timeout: 12000, maxBuffer: 4 << 20 },
+      (err, stdout) => resolve(err ? "" : String(stdout))
+    );
+  });
+}
+
+/**
+ * 1337x — one of the largest public trackers. No API: search rows carry only
+ * a detail-page link; the info hash lives on that detail page. So the search
+ * page is scraped for rows (name, seeders, size), then the top few detail
+ * pages are fetched for their magnet hash. Capped at 4 rows per search to
+ * stay inside the 10 s provider deadline; the strict matcher filters junk.
+ */
+async function provider1337x(type: "movie" | "tv", ctx: BayContext): Promise<TorrentSource[]> {
+  const { title, originalTitle, year, season, episode } = ctx;
+  if (!title) return [];
+  const slug = encodeURIComponent(
+    (type === "movie" ? `${title} ${year ?? ""}` : `${title} s${pad(season)}e${pad(episode)}`).trim()
+  ).replace(/%20/g, "+");
+  let html = "";
+  for (const host of X1337_HOSTS) {
+    html = await x1337Page(`${host}/search/${slug}/1/`);
+    if (html) break;
+  }
+  if (!html) return [];
+
+  interface X1337Row {
+    href: string;
+    name: string;
+    seeders: number;
+    peers: number;
+    sizeBytes: number;
+  }
+  const rows: X1337Row[] = [];
+  const seenHref = new Set<string>();
+  for (const trChunk of html.split("<tr>")) {
+    const href = trChunk.match(/href="(\/torrent\/[^"]+\/)"/)?.[1];
+    if (!href || seenHref.has(href)) continue;
+    const rawName =
+      trChunk.match(/<a[^>]+href="\/torrent\/[^"]+\/"[^>]*title="([^"]+)"/)?.[1] ??
+      trChunk.match(/<a[^>]+href="\/torrent\/[^"]+\/"[^>]*>([\s\S]*?)<\/a>/)?.[1] ??
+      "";
+    const name = decodeHtml(rawName.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    if (!name || name.length < 6) continue;
+    seenHref.add(href);
+    const cell = (cls: string) =>
+      trChunk.match(new RegExp(`class="${cls}[^"]*"[^>]*>([\\d,.]+)`))?.[1] ?? "";
+    const sizeRaw = trChunk.match(/class="coll-4[^"]*"[^>]*>([\d.]+\s*[KMGTP]?B?)</i)?.[1] ?? "";
+    rows.push({
+      href,
+      name,
+      seeders: Number(cell("coll-2").replace(/[,.]/g, "")) || 0,
+      peers: Number(cell("coll-3").replace(/[,.]/g, "")) || 0,
+      sizeBytes: parseSizeBytes(sizeRaw.replace(/i/g, "")),
+    });
+    if (rows.length >= 12) break;
+  }
+
+  // resolve hashes: fetch detail pages for the top candidates, 2 at a time
+  const out: TorrentSource[] = [];
+  await mapPool(rows.slice(0, 6), 2, async (row) => {
+    if (out.length >= 4) return;
+    const detailHost = X1337_HOSTS[0];
+    const page = await x1337Page(`${detailHost}${row.href}`);
+    const infoHash = page.match(/magnet:\?xt=urn:btih:([0-9a-fA-F]{40})/)?.[1]?.toLowerCase();
+    if (!infoHash) return;
+    const p = parseRelease(row.name);
+    const match =
+      type === "movie"
+        ? matchMovie(p, title, originalTitle, year ?? "")
+        : matchTv(p, season, episode, title, originalTitle, {
+            airDate: ctx.airDate,
+            showLang: ctx.showLang,
+            absEpisode: ctx.absEpisode,
+          });
+    if (!match) return;
+    if (type === "tv" && countryPenalty(p, ctx.countries) < 0) return;
+    out.push({
+      id: infoHash,
+      releaseName: row.name,
+      seeders: row.seeders,
+      peers: row.peers,
+      sizeBytes: row.sizeBytes,
+      provider: "1337x",
+      quality: detectQuality(row.name),
+      fileIdx: null,
+      match,
+      score: 0,
+    });
+  });
+  return out;
+}
+
+/* ---------- EZTV (eztvx.re — imdb-pinned TV episode API) ---------- */
+
+interface EztvRow {
+  hash?: string;
+  filename?: string;
+  season_number?: number;
+  episode_number?: number;
+  seeds?: number;
+  peers?: number;
+  size_bytes?: number;
+}
+
+async function eztvSearch(imdbId: string): Promise<EztvRow[]> {
+  for (const host of ["https://eztvx.re", "https://eztvz.xyz"]) {
+    try {
+      const res = await pacedFetch(
+        `${host}/api/get-torrents?imdb_id=${encodeURIComponent(imdbId)}&limit=100`,
+        { headers: { accept: "application/json", "user-agent": BROWSER_UA }, timeoutMs: 9000 }
+      );
+      if (!res.ok) continue;
+      const data = (await res.json()) as { torrents?: EztvRow[] };
+      if (Array.isArray(data.torrents)) return data.torrents;
+    } catch {
+      // try the next host
+    }
+  }
+  return [];
+}
+
+/**
+ * EZTV — TV episode specialist with a JSON API keyed by IMDb id (the API the
+ * old eztv front-ends ran on; eztvx.re is the current host). One call lists
+ * the whole show, so rows are pre-filtered by the API's own season/episode
+ * numbers before the strict matcher validates the release name.
+ */
+async function providerEztv(
+  type: "movie" | "tv",
+  imdbId: string,
+  ctx: BayContext
+): Promise<TorrentSource[]> {
+  if (type !== "tv" || !imdbId || !ctx.title) return [];
+  const { title, originalTitle, season, episode } = ctx;
+  const out: TorrentSource[] = [];
+  for (const r of await eztvSearch(imdbId)) {
+    const infoHash = (r.hash ?? "").toLowerCase();
+    // eztv double-escapes filenames in the API payload
+    const name = decodeHtml(r.filename ?? "").trim();
+    if (!/^[0-9a-f]{40}$/.test(infoHash) || !name) continue;
+    if (r.season_number != null && r.season_number > 0 && r.season_number !== season) continue;
+    if (r.episode_number != null && r.episode_number > 0 && r.episode_number !== episode) continue;
+    const p = parseRelease(name);
+    const match = matchTv(p, season, episode, title, originalTitle, {
+      airDate: ctx.airDate,
+      showLang: ctx.showLang,
+      absEpisode: ctx.absEpisode,
+    });
+    if (!match) continue;
+    out.push({
+      id: infoHash,
+      releaseName: name,
+      seeders: Math.max(0, Number(r.seeds) || 0),
+      peers: Math.max(0, Number(r.peers) || 0),
+      sizeBytes: Math.max(0, Number(r.size_bytes) || 0),
+      provider: "EZTV",
+      quality: detectQuality(name),
+      fileIdx: null,
+      match,
+      score: 0,
+    });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 /* ---------- anime: nyaa.si (fansub indexers) ---------- */
 
 interface NyaaItem {
@@ -1049,6 +1342,11 @@ export async function searchTorrentSources(
     jobs.push({ name: "BitSearch", run: () => providerBitSearch(type, bayCtx) });
     jobs.push({ name: "TorrentsCSV", run: () => providerTorrentsCsv(type, bayCtx) });
     jobs.push({ name: "SolidTorrents", run: () => providerSolidTorrents(type, bayCtx) });
+    jobs.push({ name: "Knaben", run: () => providerKnaben(type, bayCtx) });
+    jobs.push({ name: "1337x", run: () => provider1337x(type, bayCtx) });
+    if (type === "tv" && imdbId) {
+      jobs.push({ name: "EZTV", run: () => providerEztv(type, imdbId, bayCtx) });
+    }
     // Nyaa carries more than Japanese anime — western animation and
     // fansub-adjacent shows live there too. One or two cheap RSS calls;
     // the strict matcher rejects everything that isn't this show.
