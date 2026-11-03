@@ -479,6 +479,101 @@ async function providerSolidTorrents(
   return [...seen.values()];
 }
 
+/* ---------- the pirate bay (apibay.org — official TPB API) ---------- */
+
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+interface ApibayRow {
+  name?: string;
+  info_hash?: string;
+  leechers?: string;
+  seeders?: string;
+  /** bytes as a string */
+  size?: string;
+  /** "tt1375666" — present on movie rows, empty on most TV rows */
+  imdb?: string;
+  category?: string;
+}
+
+/**
+ * The Pirate Bay via apibay.org (the API the TPB front-ends run on). Sits
+ * behind Cloudflare and rate-limits hard — requests go through the per-host
+ * pacer with a browser UA, and a challenge page ("Just a moment…") is treated
+ * as "provider down", never parsed. Rows on movie searches carry the upload's
+ * IMDb id, which pins the torrent to the requested title exactly like YTS.
+ */
+async function apibayQuery(q: string): Promise<ApibayRow[]> {
+  try {
+    const res = await pacedFetch(
+      `https://apibay.org/q.php?q=${encodeURIComponent(q)}`,
+      {
+        headers: { accept: "application/json", "user-agent": BROWSER_UA },
+        timeoutMs: 12000,
+      }
+    );
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (!text.trim().startsWith("[")) return []; // CF challenge / HTML error
+    const rows = JSON.parse(text) as ApibayRow[];
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+async function providerApibay(
+  type: "movie" | "tv",
+  imdbId: string | null,
+  ctx: BayContext
+): Promise<TorrentSource[]> {
+  const { title, originalTitle, year, season, episode } = ctx;
+  const queries =
+    type === "movie"
+      ? [`${title} ${year ?? ""}`.trim(), title]
+      : [
+          `${title} s${pad(season)}e${pad(episode)}`,
+          `${title} season ${season}`,
+          title,
+        ];
+  const seen = new Map<string, TorrentSource>();
+  for (const q of queries) {
+    if (seen.size >= 15) break;
+    for (const r of await apibayQuery(q)) {
+      if (!r.info_hash || !/^[0-9a-f]{40}$/i.test(r.info_hash)) continue; // "No results" row too
+      // a row tagged with a DIFFERENT imdb id is a different film — drop it
+      if (r.imdb && imdbId && r.imdb.toLowerCase() !== imdbId.toLowerCase()) continue;
+      const name = (r.name ?? "Torrent").trim();
+      const p = parseRelease(name);
+      const match =
+        type === "movie"
+          ? matchMovie(p, title, originalTitle, year)
+          : matchTv(p, season, episode, title, originalTitle, {
+              airDate: ctx.airDate,
+              showLang: ctx.showLang,
+              absEpisode: ctx.absEpisode,
+            });
+      if (!match) continue;
+      if (type === "tv" && countryPenalty(p, ctx.countries) < 0) continue;
+      const key = r.info_hash.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.set(key, {
+        id: key,
+        releaseName: name,
+        seeders: Number(r.seeders) || 0,
+        peers: Number(r.leechers) || 0,
+        sizeBytes: Number(r.size) || 0,
+        provider: "PirateBay",
+        quality: detectQuality(name),
+        fileIdx: null,
+        match,
+        score: 0,
+      });
+    }
+  }
+  return [...seen.values()];
+}
+
 interface YtsTorrent {  hash?: string;
   quality?: string;
   type?: string;
@@ -781,6 +876,7 @@ const PROVIDER_TRUST: Record<string, number> = {
   // "NyaaSi" and must get the same trust as direct Nyaa results
   NyaaSi: 4,
   Torrentio: 3,
+  PirateBay: 2,
   EZTV: 2,
   YTS: 2,
   SolidTorrents: 1,
@@ -884,6 +980,7 @@ export async function searchTorrentSources(
     isAnime,
   };
   if (matchTitle) {
+    jobs.push({ name: "PirateBay", run: () => providerApibay(type, imdbId, bayCtx) });
     jobs.push({ name: "BitSearch", run: () => providerBitSearch(type, bayCtx) });
     jobs.push({ name: "TorrentsCSV", run: () => providerTorrentsCsv(type, bayCtx) });
     jobs.push({ name: "SolidTorrents", run: () => providerSolidTorrents(type, bayCtx) });

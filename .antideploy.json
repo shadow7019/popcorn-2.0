@@ -1,3 +1,10 @@
 {
-  "applicationId": "d2512678-2b12-41b0-bf9e-a4196c26c656"
+  "applicationId": "d2512678-2b12-41b0-bf9e-a4196c26c656",
+  "env": {
+    "NODE_PATH": "./node_modules",
+    "PDF_SKIP_BROWSER_INSTALL": "1",
+    "PLAYWRIGHT_CHROMIUM_PATH": "/usr/bin/chromium",
+    "PLAYWRIGHT_PATH": "./node_modules/playwright",
+    "TMPDIR": "/tmp"
+  }
 }
