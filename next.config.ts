@@ -11,6 +11,10 @@ const nextConfig: NextConfig = {
     "@thaunknown/simple-peer",
     "webrtc-polyfill",
     "node-datachannel",
+    // CF-clearance minter: playwright-core's dynamic internal requires break
+    // when bundled into a chunk, and the standalone output must carry the
+    // whole package for the runtime import in src/lib/cf-clearance.ts
+    "playwright-core",
   ],
   // output-file tracing copies only part of these packages (node-datachannel
   // loses dist/cjs — 7 of 172 files), which breaks a standalone deployment
@@ -22,6 +26,7 @@ const nextConfig: NextConfig = {
       "./node_modules/node-datachannel/**",
       "./node_modules/@thaunknown/**",
       "./node_modules/webrtc-polyfill/**",
+      "./node_modules/playwright-core/**",
     ],
   },
   typescript: {

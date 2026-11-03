@@ -32,6 +32,32 @@ const lastMintAt = new Map<string, number>();
 const MINT_MIN_INTERVAL_MS = 60_000;
 const DEFAULT_COOKIE_TTL_MS = 30 * 60_000;
 
+/** last mint failure reason — surfaced by /api/torrent/cfdebug so a silent
+ *  no-op on the deployment is diagnosable from the outside */
+let lastError: string | null = null;
+let moduleState: "unchecked" | "ok" | "missing" = "unchecked";
+
+export interface CfDebug {
+  moduleState: string;
+  chromiumPath: string | null;
+  chromiumPresent: boolean;
+  lastError: string | null;
+  cachedHosts: string[];
+  ua: string;
+}
+
+export function cfDebug(): CfDebug {
+  const p = chromiumPath();
+  return {
+    moduleState,
+    chromiumPath: p,
+    chromiumPresent: !!p,
+    lastError,
+    cachedHosts: [...clearanceCache.keys()],
+    ua: "",
+  };
+}
+
 function hostOf(url: string): string {
   try {
     return new URL(url).origin;
@@ -41,7 +67,13 @@ function hostOf(url: string): string {
 }
 
 function chromiumPath(): string {
-  return process.env.PLAYWRIGHT_CHROMIUM_PATH || "/usr/bin/chromium";
+  const fromEnv = process.env.PLAYWRIGHT_CHROMIUM_PATH?.trim();
+  const p = fromEnv || "/usr/bin/chromium";
+  try {
+    return require("node:fs").existsSync(p) ? p : "";
+  } catch {
+    return p;
+  }
 }
 
 /** curl replay of a cached clearance cookie — cheap, no browser needed. */
@@ -67,16 +99,26 @@ const isChallenge = (html: string) =>
 async function mint(url: string, ua: string, waitMs: number): Promise<Clearance | null> {
   const host = hostOf(url);
   if (!host) return null;
+  const execPath = chromiumPath();
+  if (!execPath) {
+    lastError = `chromium binary not found (PLAYWRIGHT_CHROMIUM_PATH=${
+      process.env.PLAYWRIGHT_CHROMIUM_PATH || "unset"
+    })`;
+    return null;
+  }
   let pw: typeof import("playwright-core");
   try {
     pw = await import("playwright-core");
-  } catch {
+    moduleState = "ok";
+  } catch (e) {
+    moduleState = "missing";
+    lastError = `playwright-core import failed: ${e instanceof Error ? e.message.slice(0, 120) : "?"}`;
     return null; // playwright-core not installed
   }
   let browser: import("playwright-core").Browser | null = null;
   try {
     browser = await pw.chromium.launch({
-      executablePath: chromiumPath(),
+      executablePath: execPath,
       headless: true,
       args: [
         "--no-sandbox",
@@ -104,11 +146,17 @@ async function mint(url: string, ua: string, waitMs: number): Promise<Clearance 
       if (html && !isChallenge(html)) break;
     }
     html = html || (await page.content().catch(() => ""));
-    if (isChallenge(html)) return null;
+    if (isChallenge(html)) {
+      lastError = "challenge held: headless browser did not clear it";
+      return null;
+    }
 
     const cookies = await ctx.cookies();
     const clearance = cookies.find((c) => c.name === "cf_clearance");
-    if (!clearance) return null;
+    if (!clearance) {
+      lastError = "challenge passed but no cf_clearance cookie was issued";
+      return null;
+    }
     const ttl =
       clearance.expires > 0
         ? clearance.expires * 1000 - Date.now() - 60_000
@@ -119,8 +167,12 @@ async function mint(url: string, ua: string, waitMs: number): Promise<Clearance 
       until: Date.now() + Math.min(Math.max(ttl, 5 * 60_000), 6 * 3600_000),
     };
     clearanceCache.set(host, rec);
+    lastError = null;
     return rec;
-  } catch {
+  } catch (e) {
+    lastError = `browser launch/navigation failed: ${
+      e instanceof Error ? e.message.slice(0, 160) : "?"
+    }`;
     return null;
   } finally {
     await browser?.close().catch(() => undefined);
