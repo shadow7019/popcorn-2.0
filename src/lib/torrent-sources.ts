@@ -924,6 +924,20 @@ function merge(sources: TorrentSource[]): TorrentSource[] {
 
 /* ---------- public API ---------- */
 
+/**
+ * Stable numeric id for a catalog title (FNV-1a over its slug). The legal
+ * sources view builds its URL ids from these (season = id*100+n, episode =
+ * id*1000+e), so the mapping must be deterministic across builds and hosts.
+ */
+export function catalogNumericId(title: { slug: string }): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < title.slug.length; i++) {
+    h ^= title.slug.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
 export interface SearchArgs {
   type: "movie" | "tv";
   tmdbId: number;
