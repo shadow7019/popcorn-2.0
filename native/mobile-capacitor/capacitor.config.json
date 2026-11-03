@@ -1,0 +1,16 @@
+{
+  "appId": "space.popcorntime.app",
+  "appName": "PopcornTime",
+  "webDir": "www",
+  "server": {
+    "url": "https://otama.antideploy.app",
+    "androidScheme": "https",
+    "allowNavigation": ["otama.antideploy.app", "otama2.space-z.ai"]
+  },
+  "ios": {
+    "contentInset": "always"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
