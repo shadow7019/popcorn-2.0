@@ -36,7 +36,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      # no android-actions/setup-android: the ubuntu runner ships a complete
+      # SDK, and the action's default `packages: tools platform-tools` now
+      # crashes — Google removed the legacy `tools` package from sdkmanager.
+      # Gradle auto-installs any missing platform/build-tools (licenses
+      # pre-accepted on runner images).
       - run: npm ci
       # android/ is gitignored (generated); recreate it on the runner
       - run: npx cap add android
