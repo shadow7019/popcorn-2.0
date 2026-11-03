@@ -1030,3 +1030,60 @@ export function engineStats(): { torrents: number; cacheDir: string } {
   const client = state().client;
   return { torrents: client?.torrents.length ?? 0, cacheDir: downloadDir() };
 }
+
+/* ---------- swarm health probes (used by /api/torrent/health) ---------- */
+
+export interface ProbeSnapshot {
+  status: "live" | "dead";
+  peers: number;
+  ts: number;
+}
+
+const probeCache = new Map<string, { last: ProbeSnapshot; strikes: number }>();
+
+/**
+ * Metadata probe: add the torrent to the shared engine, wait up to timeoutMs
+ * for metadata/peers, then idle it (no file selected) so it never competes
+ * with a real stream. An already-warm torrent answers instantly. The raced
+ * ensure keeps its own catch — a late 75 s metadata timeout must never become
+ * an unhandled rejection.
+ */
+export async function probeTorrent(
+  infoHash: string,
+  displayName: string,
+  timeoutMs: number,
+  _sourceUrl?: string | null
+): Promise<{ status: "live" | "dead"; peers: number }> {
+  let live = false;
+  let peers = 0;
+  try {
+    const ensuring = ensureTorrent(infoHash, displayName || infoHash).catch(() => null);
+    const t = await Promise.race([
+      ensuring,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(timeoutMs, 1000))),
+    ]);
+    if (t) {
+      live = t.ready || t.numPeers > 0;
+      peers = t.numPeers;
+      idleTorrent(t);
+    }
+  } catch {
+    live = false;
+  }
+  const last: ProbeSnapshot = { status: live ? "live" : "dead", peers, ts: Date.now() };
+  const rec = probeCache.get(infoHash) ?? { last, strikes: 0 };
+  rec.last = last;
+  rec.strikes = live ? 0 : rec.strikes + 1;
+  probeCache.set(infoHash, rec);
+  return { status: last.status, peers: last.peers };
+}
+
+/** Consecutive silent-probe count for one info hash (the route's two-strike rule). */
+export function probeFailures(infoHash: string): number {
+  return probeCache.get(infoHash)?.strikes ?? 0;
+}
+
+/** Last probe verdict for one info hash (debug GET). */
+export function cachedProbe(infoHash: string): ProbeSnapshot | null {
+  return probeCache.get(infoHash)?.last ?? null;
+}

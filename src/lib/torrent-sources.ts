@@ -950,6 +950,37 @@ export interface ProviderStat {
  *  inside has its own timeouts, this catches the multi-query stacks. */
 const PROVIDER_DEADLINE_MS = 10_000;
 
+/* ---------- provider circuit breaker ---------- */
+
+/**
+ * Rolling provider health. A provider that keeps timing out or erroring gets
+ * a cooldown instead of being re-tried on every search — one dead indexer
+ * must not stretch every scan to its full deadline (the "dead servers" UX:
+ * slow, half-empty results even though the healthy providers answer fast).
+ * One failure = 60 s cooldown, doubling per consecutive failure, capped at
+ * 10 min. Any clean answer resets the streak. Zero results is NOT a failure
+ * — an empty-but-healthy provider stays in rotation.
+ */
+const providerCooldown = new Map<string, { fails: number; until: number }>();
+const COOLDOWN_BASE_MS = 60_000;
+const COOLDOWN_MAX_MS = 10 * 60_000;
+
+function providerOnCooldown(name: string): boolean {
+  const c = providerCooldown.get(name);
+  return !!c && c.until > Date.now();
+}
+
+function providerOutcome(name: string, ok: boolean): void {
+  if (ok) {
+    providerCooldown.delete(name);
+    return;
+  }
+  const c = providerCooldown.get(name) ?? { fails: 0, until: 0 };
+  c.fails += 1;
+  c.until = Date.now() + Math.min(COOLDOWN_BASE_MS * 2 ** (c.fails - 1), COOLDOWN_MAX_MS);
+  providerCooldown.set(name, c);
+}
+
 export async function searchTorrentSources(
   args: SearchArgs,
   onProvider?: (stat: ProviderStat) => void
@@ -1024,6 +1055,16 @@ export async function searchTorrentSources(
   // Each job catches its own errors, so the pool always resolves.
   const settled = await mapPool(jobs, 3, async (j): Promise<TorrentSource[]> => {
     const t0 = Date.now();
+    if (providerOnCooldown(j.name)) {
+      onProvider?.({
+        name: j.name,
+        ms: 0,
+        count: 0,
+        ok: true,
+        error: "cooldown (skipped after recent failures)",
+      });
+      return [];
+    }
     try {
       const r = await Promise.race([
         j.run(),
@@ -1031,6 +1072,7 @@ export async function searchTorrentSources(
       ]);
       const ms = Date.now() - t0;
       const timedOut = ms >= PROVIDER_DEADLINE_MS;
+      providerOutcome(j.name, !timedOut);
       onProvider?.({
         name: j.name,
         ms,
@@ -1040,6 +1082,7 @@ export async function searchTorrentSources(
       });
       return r;
     } catch (err) {
+      providerOutcome(j.name, false);
       onProvider?.({
         name: j.name,
         ms: Date.now() - t0,
