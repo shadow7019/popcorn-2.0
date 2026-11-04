@@ -173,19 +173,21 @@ jobs:
         env:
           DATABASE_URL: file:./db/build-placeholder.db
         run: node scripts/prepare-renderer.mjs
-      - name: Smoke-test the standalone renderer (API must answer JSON)
+      - name: Smoke-test the standalone renderer (page + TMDB API)
         run: |
           cd desktop/resources/renderer
           DATABASE_URL="file:$(pwd)/../popcorntime-template.db" PORT=3999 HOSTNAME=127.0.0.1 node server.js &
           SRV=$!
-          ok=""
+          page=""; api=""
           for i in $(seq 1 45); do
-            curl -sf "http://127.0.0.1:3999/api/catalog?type=movie&skip=0" -o /tmp/smoke.json && ok=1 && break
+            [ -z "$page" ] && curl -sf "http://127.0.0.1:3999/" -o /tmp/smoke-page.html && grep -q "<" /tmp/smoke-page.html && page=1
+            [ -z "$api" ] && curl -sf "http://127.0.0.1:3999/api/tmdb/home" -o /tmp/smoke.json && head -c 1 /tmp/smoke.json | grep -q "{" && api=1
+            [ -n "$page" ] && [ -n "$api" ] && break
             sleep 2
           done
           kill $SRV 2>/dev/null || true
-          if [ -z "$ok" ]; then echo "renderer API smoke test FAILED"; exit 1; fi
-          echo "smoke ok:"; head -c 160 /tmp/smoke.json; echo
+          if [ -z "$page" ] || [ -z "$api" ]; then echo "renderer smoke FAILED (page=$page api=$api)"; exit 1; fi
+          echo "smoke ok — home page + /api/tmdb/home JSON"; head -c 120 /tmp/smoke.json; echo
       - name: Patch electron-builder (allow node_modules in extraResources)
         working-directory: desktop
         run: node scripts/patch-builder.mjs

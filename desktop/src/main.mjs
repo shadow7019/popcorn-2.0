@@ -308,7 +308,7 @@ function createWindow() {
  * Provider outages do NOT trigger this — those stay JSON (502).
  */
 async function apiSmokeCheck(base) {
-  const smoke = await httpGet(`${base}/api/catalog?type=movie&skip=0`, 25_000)
+  const smoke = await httpGet(`${base}/api/tmdb/home`, 25_000)
   const looksJson = (smoke.body || '').trimStart().startsWith('{')
   if (smoke.ok && looksJson) {
     log('API self-check ok (JSON)')
