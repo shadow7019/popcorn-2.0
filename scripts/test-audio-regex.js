@@ -1,8 +1,11 @@
-// Regex validation for the audio-codec scoring + remux trigger. Imports the
-// PRODUCTION regex from src/lib/torrent-sources.ts (single source of truth)
-// so the battery fails if the source patterns ever drift.
-const { BAD_AUDIO_RE } = await import("/home/z/my-project/src/lib/torrent-sources.ts");
-const BAD_AUDIO = BAD_AUDIO_RE;
+// Regex validation for the audio-codec scoring + remux trigger. Extracts the
+// BAD_AUDIO_RE literal straight from src/lib/torrent-sources.ts (single
+// source of truth) so the battery fails if the source patterns drift.
+import fs from "node:fs";
+const src = fs.readFileSync("/home/z/my-project/src/lib/torrent-sources.ts", "utf8");
+const extracted = src.match(/BAD_AUDIO_RE\s*=\s*\/(.+?)\/i;/s)?.[1];
+if (!extracted) throw new Error("could not extract BAD_AUDIO_RE from torrent-sources.ts");
+const BAD_AUDIO = new RegExp(extracted, "i");
 const AAC = /\baac(?:[ ._]?[2-9](?:\.[0-9])?)?\b|\bhe-?aac\b/;
 const MKV = /\bmkv\b|\[mkv\]|\bavi\b/i;
 
