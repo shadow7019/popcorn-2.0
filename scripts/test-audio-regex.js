@@ -1,7 +1,7 @@
 // Regex validation for the audio-codec scoring added to scoreTorrent.
 // Every detection must hit exactly the intended names; neutral names must
 // pass through untouched (no false positives).
-const BAD_AUDIO = /\bac3\b|\be-?ac3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/;
+const BAD_AUDIO = /\bac-?3\b|\be-?ac-?3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/;
 const AAC = /\baac(?:[ ._]?[2-9](?:\.[0-9])?)?\b|\bhe-?aac\b/;
 const MKV = /\bmkv\b|\[mkv\]|\bavi\b/i;
 
@@ -14,6 +14,8 @@ const cases = [
   ["Title.2021.720p.WEBRip.DD5.1.x264-GalaxyRG", true, false, false],
   ["Movie.2022.1080p.WEB-DL.DD+.5.1.H.264-EVO", true, false, false],
   ["Old.1998.DVDRip.AC3.5.1.XviD-DiAMOND", true, false, false],
+  ["The.Dark.Knight.2008.1080p.H264.AC-3.mkv", true, false, true],
+  ["Series.S01.1080p.BluRay.E-AC-3.5.1.x264-GRP", true, false, false],
   ["Series.S02.1080p.BluRay.Dolby.Digital.Plus.x264", true, false, false],
   ["Flick.2017.BluRay.DTSHD.x264-GRP", true, false, false],
   ["Anime.2024.1080p.BluRay.TRUEHD.5.1.FLAC-GROUP", true, false, false],

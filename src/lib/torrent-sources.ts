@@ -1184,7 +1184,7 @@ export function scoreTorrent(t: TorrentSource): number {
   // Dolby/DTS release below any AAC release; they still surface when they
   // are the only candidates, and the picture keeps playing either way.
   if (
-    /\bac3\b|\be-?ac3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/.test(
+    /\bac-?3\b|\be-?ac-?3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/.test(
       n
     )
   )
