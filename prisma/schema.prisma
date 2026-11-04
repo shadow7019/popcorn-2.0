@@ -4,10 +4,10 @@
 // Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
+// "native" covers the platform deployment; the two darwin targets make the
+// desktop DMGs (arm64 Apple Silicon + x64 Intel) work from one build machine.
 generator client {
   provider = "prisma-client-js"
-  # "native" covers the platform deployment; the two darwin targets make the
-  # desktop DMGs (arm64 Apple Silicon + x64 Intel) work from one build machine.
   binaryTargets = ["native", "darwin-arm64", "darwin-x64"]
 }
 
