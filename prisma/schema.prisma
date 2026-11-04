@@ -6,6 +6,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  # "native" covers the platform deployment; the two darwin targets make the
+  # desktop DMGs (arm64 Apple Silicon + x64 Intel) work from one build machine.
+  binaryTargets = ["native", "darwin-arm64", "darwin-x64"]
 }
 
 datasource db {

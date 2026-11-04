@@ -1,16 +1,20 @@
 # Builds the PopcornTime native shells for all targets on their proper
 # runners. Trigger manually (workflow_dispatch) or by pushing a v* tag.
 #
-#   android  → PopcornTime-debug.apk      (Capacitor, any Android 6+ device)
-#   windows  → .msi / -setup.exe x64      (Tauri, Windows 10/11)
-#   macos    → DMG aarch64, ad-hoc signed (Tauri, Apple Silicon M1/M2/M3/M4)
-#   ios      → unsigned .ipa (Capacitor; sideload with AltStore/Sideloadly)
+#   android      → PopcornTime-debug.apk   (Capacitor, any Android 6+ device)
+#   windows      → .msi / -setup.exe x64   (Tauri, Windows 10/11)
+#   macos        → light DMG+ZIP universal (Tauri shell, ~6 MB — loads the hosted site)
+#   macos-full-* → SELF-CONTAINED DMGs     (Electron + the whole site bundled,
+#                  arm64 + x64, ~200-300 MB — the OTAMA-style build)
+#   ios          → unsigned .ipa (Capacitor; sideload with AltStore/Sideloadly)
 #
-# All shells wrap https://popcorntime.antideploy.app, so site fixes ship
-# without rebuilding these binaries. The mac DMG is created with hdiutil on a
-# real Apple runner and the bundle is ad-hoc signed (codesign "-") — without
-# that, Apple Silicon refuses to launch the app ("damaged"). The ipa is
-# unsigned by design: end users sign it with their own Apple ID via
+# The light shell wraps https://popcorntime.antideploy.app, so site fixes ship
+# without rebuilding it. The full Electron builds embed the site's standalone
+# output (webtorrent engine in-process, Prisma/SQLite, TMDB key baked into the
+# source) so they run with zero external services — same architecture as the
+# old OTAMA desktop app. All mac bundles are ad-hoc signed (codesign "-") so
+# Gatekeeper shows the bypassable "cannot verify" dialog instead of "damaged".
+# The ipa is unsigned by design: end users sign it with their own Apple ID via
 # Sideloadly/AltStore, or install as-is with TrollStore.
 name: build-apps
 
@@ -132,6 +136,133 @@ jobs:
             gh release upload v1.0.0 \
               "PopcornTime-1.0.4-macos-universal.dmg" \
               "PopcornTime-1.0.4-macos-universal.zip" \
+              --clobber --repo "$GITHUB_REPOSITORY" && exit 0
+            echo "upload attempt $i failed; retrying in 20s"; sleep 20
+          done
+          exit 1
+
+  # ---- Self-contained Electron builds (OTAMA-style, the whole site inside) ----
+  # Two jobs because node-datachannel (webtorrent's WebRTC backend) downloads
+  # ONE arch-specific binary at install time: the x64 job swaps it via
+  # prebuild-install so the Intel DMG carries a working native module.
+  macos-full-arm64:
+    name: macOS full DMG — Apple Silicon (Electron)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install web app dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Install desktop build dependencies (electron + electron-builder)
+        working-directory: desktop
+        run: |
+          npm install --no-audit --no-fund
+          # npm's install-script policy can block electron's postinstall — ensure the binary lands
+          if [ ! -f "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" ]; then
+            node node_modules/electron/install.js
+          fi
+      - name: Build web UI into standalone renderer
+        working-directory: desktop
+        env:
+          DATABASE_URL: file:./db/build-placeholder.db
+        run: node scripts/prepare-renderer.mjs
+      - name: Smoke-test the standalone renderer (API must answer JSON)
+        run: |
+          cd desktop/resources/renderer
+          DATABASE_URL="file:$(pwd)/../popcorntime-template.db" PORT=3999 HOSTNAME=127.0.0.1 node server.js &
+          SRV=$!
+          ok=""
+          for i in $(seq 1 45); do
+            curl -sf "http://127.0.0.1:3999/api/catalog?type=movie&skip=0" -o /tmp/smoke.json && ok=1 && break
+            sleep 2
+          done
+          kill $SRV 2>/dev/null || true
+          if [ -z "$ok" ]; then echo "renderer API smoke test FAILED"; exit 1; fi
+          echo "smoke ok:"; head -c 160 /tmp/smoke.json; echo
+      - name: Patch electron-builder (allow node_modules in extraResources)
+        working-directory: desktop
+        run: node scripts/patch-builder.mjs
+      - name: Package DMG (arm64, ad-hoc signed in afterPack)
+        working-directory: desktop
+        run: npx electron-builder --mac dmg --arm64 --publish never
+      - name: DMG checksum
+        working-directory: desktop/dist
+        run: shasum -a 256 PopcornTime-1.0.5-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PopcornTime-macos-full-arm64
+          path: desktop/dist/PopcornTime-1.0.5-arm64.dmg
+          if-no-files-found: error
+      - name: Attach full arm64 DMG to v1.0.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3; do
+            gh release upload v1.0.0 "desktop/dist/PopcornTime-1.0.5-arm64.dmg" \
+              --clobber --repo "$GITHUB_REPOSITORY" && exit 0
+            echo "upload attempt $i failed; retrying in 20s"; sleep 20
+          done
+          exit 1
+
+  macos-full-x64:
+    name: macOS full DMG — Intel (Electron)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install web app dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Swap node-datachannel native binary to x64 (Intel DMG)
+        run: |
+          cd node_modules/node-datachannel
+          npx prebuild-install -r napi --arch x64 --platform darwin
+          file build/Release/node_datachannel.node
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Install desktop build dependencies (electron + electron-builder)
+        working-directory: desktop
+        run: |
+          npm install --no-audit --no-fund
+          if [ ! -f "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" ]; then
+            node node_modules/electron/install.js
+          fi
+      - name: Build web UI into standalone renderer
+        working-directory: desktop
+        env:
+          DATABASE_URL: file:./db/build-placeholder.db
+        run: node scripts/prepare-renderer.mjs
+      - name: Patch electron-builder (allow node_modules in extraResources)
+        working-directory: desktop
+        run: node scripts/patch-builder.mjs
+      - name: Package DMG (x64, ad-hoc signed in afterPack)
+        working-directory: desktop
+        run: npx electron-builder --mac dmg --x64 --publish never
+      - name: DMG checksum
+        working-directory: desktop/dist
+        run: shasum -a 256 PopcornTime-1.0.5-x64.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PopcornTime-macos-full-x64
+          path: desktop/dist/PopcornTime-1.0.5-x64.dmg
+          if-no-files-found: error
+      - name: Attach full x64 DMG to v1.0.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3; do
+            gh release upload v1.0.0 "desktop/dist/PopcornTime-1.0.5-x64.dmg" \
               --clobber --repo "$GITHUB_REPOSITORY" && exit 0
             echo "upload attempt $i failed; retrying in 20s"; sleep 20
           done

@@ -1,0 +1,62 @@
+{
+  "name": "popcorntime-desktop",
+  "productName": "PopcornTime",
+  "version": "1.0.5",
+  "description": "PopcornTime — self-contained desktop streaming app (movies & TV shows)",
+  "main": "src/main.mjs",
+  "author": "PopcornTime",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "prepare:renderer": "node scripts/prepare-renderer.mjs",
+    "patch:builder": "node scripts/patch-builder.mjs",
+    "start": "electron .",
+    "dist:mac": "npm run prepare:renderer && npm run patch:builder && electron-builder --mac --arm64 --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "app.popcorntime.desktop",
+    "productName": "PopcornTime",
+    "copyright": "Copyright © PopcornTime — open source (MIT)",
+    "afterPack": "scripts/adhoc-sign-mac.cjs",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/popcorntime-template.db",
+        "to": "popcorntime-template.db"
+      },
+      {
+        "from": "resources/renderer",
+        "to": "renderer",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "artifactName": "PopcornTime-${version}-${arch}.${ext}",
+      "identity": null,
+      "category": "public.app-category.entertainment",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

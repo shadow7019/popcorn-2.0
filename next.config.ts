@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Desktop packaging (desktop/scripts/prepare-renderer.mjs) builds into
+  // .next-pack so it never touches the live dev server's .next directory.
+  ...(process.env.POPCORN_PACK_BUILD ? { distDir: ".next-pack" } : {}),
   // webtorrent must stay an external Node module (native bindings + dynamic
   // requires). Its transitive WebRTC backend (@thaunknown/simple-peer →
   // node-datachannel) loads a .node binary via a relative require that breaks
