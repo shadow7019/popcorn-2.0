@@ -82,46 +82,60 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: macOS Apple Silicon (DMG)
-    runs-on: macos-14 # M1 — native aarch64 build for M-chip Macs
+    name: macOS universal (DMG + ZIP)
+    runs-on: macos-14 # M1 — hosts both aarch64 and x86_64 toolchains
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
-      # build only the .app bundle; the DMG is created afterwards so the
-      # ad-hoc signature lands inside the image
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      # universal-apple-darwin: tauri builds both arches and lipo-merges them,
+      # so ONE DMG runs on Apple Silicon (M1-M5) AND Intel Macs
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: native/desktop-tauri
-          args: --target aarch64-apple-darwin --bundles app
+          args: --target universal-apple-darwin --bundles app
       - name: Ad-hoc deep sign the app bundle
         run: |
-          APP="native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PopcornTime.app"
+          APP="native/desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/macos/PopcornTime.app"
           codesign --deep --force --sign - "$APP"
           codesign --verify --deep --strict "$APP"
           codesign -dv "$APP" 2>&1 | head -4
-      - name: Create DMG with hdiutil and smoke-test mounting
+          echo "architectures: $(lipo -archs "$APP/Contents/MacOS/PopcornTime")"
+      - name: Create DMG + ZIP with hdiutil and smoke-test mounting
         run: |
-          APP="native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PopcornTime.app"
-          DMG="PopcornTime-1.0.3-macos-apple-silicon.dmg"
+          APP="native/desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/macos/PopcornTime.app"
+          DMG="PopcornTime-1.0.4-macos-universal.dmg"
+          ZIP="PopcornTime-1.0.4-macos-universal.zip"
           hdiutil create -volname PopcornTime -srcfolder "$APP" -ov -format UDZO "$DMG"
           hdiutil attach -readonly -nobrowse "$DMG" -mountpoint /tmp/pt_mount
           ls /tmp/pt_mount
           test -d "/tmp/pt_mount/PopcornTime.app"
           hdiutil detach /tmp/pt_mount
           hdiutil verify "$DMG"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+          unzip -l "$ZIP" | head -6
       - uses: actions/upload-artifact@v4
         with:
-          name: PopcornTime-macos-apple-silicon-dmg
-          path: PopcornTime-1.0.3-macos-apple-silicon.dmg
+          name: PopcornTime-macos-universal
+          path: |
+            PopcornTime-1.0.4-macos-universal.dmg
+            PopcornTime-1.0.4-macos-universal.zip
           if-no-files-found: error
-      - name: Attach DMG to v1.0.0 release
+      - name: Attach macOS builds to v1.0.0 release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload v1.0.0 "PopcornTime-1.0.3-macos-apple-silicon.dmg" --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          for i in 1 2 3; do
+            gh release upload v1.0.0 \
+              "PopcornTime-1.0.4-macos-universal.dmg" \
+              "PopcornTime-1.0.4-macos-universal.zip" \
+              --clobber --repo "$GITHUB_REPOSITORY" && exit 0
+            echo "upload attempt $i failed; retrying in 20s"; sleep 20
+          done
+          exit 1
 
   ios:
     name: iOS unsigned IPA (sideload)
@@ -164,4 +178,10 @@ jobs:
       - name: Attach IPA to v1.0.0 release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload v1.0.0 "ios/App/PopcornTime-1.0.3-ios-unsigned.ipa" --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          for i in 1 2 3; do
+            gh release upload v1.0.0 "ios/App/PopcornTime-1.0.3-ios-unsigned.ipa" \
+              --clobber --repo "$GITHUB_REPOSITORY" && exit 0
+            echo "upload attempt $i failed; retrying in 20s"; sleep 20
+          done
+          exit 1
