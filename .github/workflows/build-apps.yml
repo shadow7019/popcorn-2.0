@@ -1,18 +1,26 @@
-# Builds the PopcornTime native shells for all three targets on their proper
+# Builds the PopcornTime native shells for all targets on their proper
 # runners. Trigger manually (workflow_dispatch) or by pushing a v* tag.
 #
 #   android  → PopcornTime-debug.apk      (Capacitor, any Android 6+ device)
 #   windows  → .msi / -setup.exe x64      (Tauri, Windows 10/11)
-#   macos    → .dmg / .app aarch64        (Tauri, Apple Silicon M1/M2/M3/M4)
+#   macos    → DMG aarch64, ad-hoc signed (Tauri, Apple Silicon M1/M2/M3/M4)
+#   ios      → unsigned .ipa (Capacitor; sideload with AltStore/Sideloadly)
 #
-# All shells wrap https://pocorntime.antideploy.app, so site fixes ship without
-# rebuilding these binaries.
+# All shells wrap https://popcorntime.antideploy.app, so site fixes ship
+# without rebuilding these binaries. The mac DMG is created with hdiutil on a
+# real Apple runner and the bundle is ad-hoc signed (codesign "-") — without
+# that, Apple Silicon refuses to launch the app ("damaged"). The ipa is
+# unsigned by design: end users sign it with their own Apple ID via
+# Sideloadly/AltStore, or install as-is with TrollStore.
 name: build-apps
 
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write
 
 concurrency:
   group: build-apps-${{ github.ref }}
@@ -44,6 +52,7 @@ jobs:
       - run: npm ci
       # android/ is gitignored (generated); recreate it on the runner
       - run: npx cap add android
+      - run: npm run assets
       - run: npx cap sync android
       - run: cd android && bash gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
@@ -80,16 +89,79 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      # build only the .app bundle; the DMG is created afterwards so the
+      # ad-hoc signature lands inside the image
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: native/desktop-tauri
-          args: --target aarch64-apple-darwin
+          args: --target aarch64-apple-darwin --bundles app
+      - name: Ad-hoc deep sign the app bundle
+        run: |
+          APP="native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PopcornTime.app"
+          codesign --deep --force --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv "$APP" 2>&1 | head -4
+      - name: Create DMG with hdiutil and smoke-test mounting
+        run: |
+          APP="native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PopcornTime.app"
+          DMG="PopcornTime-1.0.3-macos-apple-silicon.dmg"
+          hdiutil create -volname PopcornTime -srcfolder "$APP" -ov -format UDZO "$DMG"
+          hdiutil attach -readonly -nobrowse "$DMG" -mountpoint /tmp/pt_mount
+          ls /tmp/pt_mount
+          test -d "/tmp/pt_mount/PopcornTime.app"
+          hdiutil detach /tmp/pt_mount
+          hdiutil verify "$DMG"
       - uses: actions/upload-artifact@v4
         with:
-          name: PopcornTime-macos-apple-silicon
-          path: |
-            native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            native/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+          name: PopcornTime-macos-apple-silicon-dmg
+          path: PopcornTime-1.0.3-macos-apple-silicon.dmg
           if-no-files-found: error
+      - name: Attach DMG to v1.0.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload v1.0.0 "PopcornTime-1.0.3-macos-apple-silicon.dmg" --clobber --repo "$GITHUB_REPOSITORY"
+
+  ios:
+    name: iOS unsigned IPA (sideload)
+    runs-on: macos-15 # Xcode 16 for Capacitor 7
+    defaults:
+      run:
+        working-directory: native/mobile-capacitor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/mobile-capacitor/package-lock.json
+      - run: npm ci
+      # ios/ is gitignored (generated); recreate it on the runner
+      - run: npx cap add ios
+      - run: npm run assets
+      - run: npx cap sync ios
+      - run: cd ios/App && pod install
+      - name: Archive app unsigned
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/App.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+      - name: Package unsigned IPA
+        run: |
+          cd ios/App
+          APP_PATH="$(ls -d build/App.xcarchive/Products/Applications/*.app)"
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry PopcornTime-1.0.3-ios-unsigned.ipa Payload
+          unzip -l PopcornTime-1.0.3-ios-unsigned.ipa | head -8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PopcornTime-ios-unsigned-ipa
+          path: native/mobile-capacitor/ios/App/PopcornTime-1.0.3-ios-unsigned.ipa
+          if-no-files-found: error
+      - name: Attach IPA to v1.0.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload v1.0.0 "native/mobile-capacitor/ios/App/PopcornTime-1.0.3-ios-unsigned.ipa" --clobber --repo "$GITHUB_REPOSITORY"

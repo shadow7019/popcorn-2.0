@@ -3,9 +3,9 @@
   "appName": "PopcornTime",
   "webDir": "www",
   "server": {
-    "url": "https://pocorntime.antideploy.app",
+    "url": "https://popcorntime.antideploy.app",
     "androidScheme": "https",
-    "allowNavigation": ["pocorntime.antideploy.app"]
+    "allowNavigation": ["popcorntime.antideploy.app"]
   },
   "ios": {
     "contentInset": "always"

@@ -1,8 +1,8 @@
 {
   "name": "otama-mobile",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "private": true,
-  "description": "PopcornTime Android/iOS shell (Capacitor) around https://pocorntime.antideploy.app",
+  "description": "PopcornTime Android/iOS shell (Capacitor) around https://popcorntime.antideploy.app",
   "scripts": {
     "sync": "cap sync",
     "android": "cap run android",
