@@ -1158,6 +1158,22 @@ async function providerNyaa(type: "movie" | "tv", ctx: BayContext): Promise<Torr
 
 /* ---------- scoring ---------- */
 
+/**
+ * Release-name probe for audio the app shells cannot decode: Chromium
+ * (Electron) and the mobile WebViews have NO decoder for AC3/E-AC3/DTS/
+ * TrueHD — the <video> element renders the picture and silently drops the
+ * audio track. Browsers bridging to OS codecs (Edge/Windows, Safari on
+ * Apple silicon) mask this, which is how an AC3 release "works on the
+ * website but not in the app". Used by scoreTorrent to sink such releases
+ * AND by the stream route to trigger the server-side remux fallback.
+ */
+export const BAD_AUDIO_RE =
+  /\b(ac-?3|e-?ac-?3|ddp|dd\+|dd[ .+_-]?[2-9]|dd|dts|dtshd|truehd|atmos|dolby)/i;
+
+export function nameNeedsAudioTranscode(name: string): boolean {
+  return BAD_AUDIO_RE.test(name);
+}
+
 export function scoreTorrent(t: TorrentSource): number {
   let s = Math.min(Math.log10(t.seeders + 1) * 4, 13);
   if (t.quality === "1080p") s += 5;
@@ -1174,21 +1190,12 @@ export function scoreTorrent(t: TorrentSource): number {
   if (/10[\s._-]?bit|hi10\w*/.test(n)) s -= 20;
   if (/av1/.test(n)) s += 1;
   if (/x264|h\.?264|xvid/.test(n) && !/10[\s._-]?bit|hi10/.test(n)) s += 2;
-  // Audio codec reality gates playback just as hard: Chromium (Electron) and
-  // the mobile WebViews decode AAC/MP3/Opus/FLAC but have NO decoder for
-  // AC3/E-AC3/DTS/TrueHD — the <video> element renders the picture and then
-  // silently drops the audio track ("video plays, no sound"), the worst
-  // failure mode we ship. Browsers that bridge to OS codecs (Edge on
-  // Windows, Safari on Apple silicon) mask this, which is exactly how an
-  // AC3 release "works on the website but not in the app". Sink every
-  // Dolby/DTS release below any AAC release; they still surface when they
-  // are the only candidates, and the picture keeps playing either way.
-  if (
-    /\bac-?3\b|\be-?ac-?3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/.test(
-      n
-    )
-  )
-    s -= 9;
+  // Audio codec reality gates playback just as hard — BAD_AUDIO_RE (shared
+  // with the stream route's remux decision) matches AC3/E-AC3/DDP/DD+/DTS/
+  // TrueHD/Atmos. Sink every Dolby/DTS release below any AAC release; they
+  // still surface when they are the only candidates, and the picture keeps
+  // playing either way.
+  if (BAD_AUDIO_RE.test(n)) s -= 9;
   if (/\baac(?:[ ._]?[2-9](?:\.[0-9])?)?\b|\bhe-?aac\b/.test(n)) s += 2.5;
   // Container: an explicit .mkv/[MKV] tag predicts a Matroska file, which
   // WebKit (iOS shell) refuses entirely — prefer mp4/webm releases when the

@@ -11,6 +11,8 @@ import {
   prioritizeRange,
   selectStreamFile,
 } from "@/lib/torrent-engine";
+import { nameNeedsAudioTranscode } from "@/lib/torrent-sources";
+import { remuxToMp4, resolveFfmpegPath } from "@/lib/remux";
 
 
 export const runtime = "nodejs";
@@ -130,6 +132,41 @@ export async function GET(req: NextRequest) {
   // torrents arrive with every file deselected; fresh ones get trimmed to the
   // one we play). Re-selecting the same file is a no-op.
   selectStreamFile(torrent, file, index);
+
+  // ---- audio/container fallback: remux through ffmpeg when the file would
+  // play silent (AC3/E-AC3/DTS/TrueHD has no decoder in Chromium or WebKit —
+  // the browser renders video and drops the track) or when an iPhone asks
+  // for a Matroska container WebKit refuses outright. Video is stream-copied
+  // (no CPU/quality cost), audio becomes AAC stereo, container fragmented
+  // MP4. Raw serving with full Range seeking is kept for everything that is
+  // decodable as-is; only the releases that were silent before pay the
+  // buffered-only seeking trade.
+  const isAppleWebView = /iPhone|iPad|iPod/i.test(req.headers.get("user-agent") ?? "");
+  const isMkv = /\.mkv$/i.test(file.name) || contentTypeFor(file.name) === "video/x-matroska";
+  const ffmpegPath = resolveFfmpegPath();
+  if (ffmpegPath && (nameNeedsAudioTranscode(`${file.name} ${dn}`) || (isMkv && isAppleWebView))) {
+    markStreamActive(id, index);
+    const input = Readable.from(
+      file.createReadStream({ start: 0, end: file.length - 1 }) as unknown as AsyncIterable<Uint8Array>
+    );
+    const handle = remuxToMp4(input);
+    const remuxDone = () => markStreamDone(id);
+    handle.output.once("close", remuxDone);
+    req.signal.addEventListener("abort", () => handle.kill());
+    console.warn(`[stream] remuxing "${file.name}" (${dn}) — not decodable by app shells as-is`);
+    const webOut = Readable.toWeb(handle.output) as unknown as ReadableStream<Uint8Array>;
+    return new Response(webOut, {
+      status: 200,
+      headers: {
+        "Content-Type": "video/mp4",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(
+          file.name.replace(/\.mkv$/i, ".mp4")
+        )}`,
+      },
+    });
+  }
 
   const raw = file.createReadStream({ start, end });
   // while this stream is open the torrent must not be evicted or swept —

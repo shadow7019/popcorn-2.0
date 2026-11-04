@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
     // when bundled into a chunk, and the standalone output must carry the
     // whole package for the runtime import in src/lib/cf-clearance.ts
     "playwright-core",
+    // remux fallback: its index.js resolves the binary via __dirname, which
+    // webpack rewriting would point inside the build chunks
+    "ffmpeg-static",
   ],
   // output-file tracing copies only part of these packages (node-datachannel
   // loses dist/cjs — 7 of 172 files), which breaks a standalone deployment
@@ -30,6 +33,10 @@ const nextConfig: NextConfig = {
       "./node_modules/@thaunknown/**",
       "./node_modules/webrtc-polyfill/**",
       "./node_modules/playwright-core/**",
+      // the remux fallback's statically-linked ffmpeg binary (downloaded at
+      // npm-install time into the package dir) — tracing would otherwise copy
+      // only index.js and the stream route would silently lose ffmpeg
+      "./node_modules/ffmpeg-static/**",
     ],
   },
   typescript: {

@@ -1,7 +1,8 @@
-// Regex validation for the audio-codec scoring added to scoreTorrent.
-// Every detection must hit exactly the intended names; neutral names must
-// pass through untouched (no false positives).
-const BAD_AUDIO = /\bac-?3\b|\be-?ac-?3\b|\bddp\b|\bdd\+|\bdd[ .+_-]?[2-9]|\bdd\b|\bdts\b|\bdtshd\b|\btruehd\b|\batmos\b|\bdolby\b/;
+// Regex validation for the audio-codec scoring + remux trigger. Imports the
+// PRODUCTION regex from src/lib/torrent-sources.ts (single source of truth)
+// so the battery fails if the source patterns ever drift.
+const { BAD_AUDIO_RE } = await import("/home/z/my-project/src/lib/torrent-sources.ts");
+const BAD_AUDIO = BAD_AUDIO_RE;
 const AAC = /\baac(?:[ ._]?[2-9](?:\.[0-9])?)?\b|\bhe-?aac\b/;
 const MKV = /\bmkv\b|\[mkv\]|\bavi\b/i;
 
