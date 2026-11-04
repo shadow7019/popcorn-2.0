@@ -188,6 +188,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   hostFatalRef.current = hostFatal;
   const failedIdsRef = useRef(failedIds);
   failedIdsRef.current = failedIds;
+  const webHealthRef = useRef(webHealth);
+  webHealthRef.current = webHealth;
   const serverFailRef = useRef(serverFail);
   serverFailRef.current = serverFail;
   const streamStartRef = useRef(0);
@@ -242,6 +244,39 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
 
   const serverLabel = useCallback((s: TorrentServer) => `${s.quality} · ${s.provider}`, []);
 
+  /** hand playback to the best Ads web server — used when every torrent
+   *  server has failed (or the host itself cannot do P2P). Preference:
+   *  reachable + embeddable → unprobed → anything; never a known-bad one.
+   *  Returns false when no web server is worth opening. */
+  const takeoverAds = useCallback(
+    (why: string): boolean => {
+      const h = webHealthRef.current;
+      let pick = -1;
+      let rank = -1;
+      WEB_SOURCES.forEach((w, i) => {
+        const st = h[w.id];
+        const r = !st ? 1 : st.ok && st.frameable ? 2 : 0; // unknown=1, good=2, bad=0
+        if (r > rank) {
+          rank = r;
+          pick = i;
+        }
+      });
+      if (pick === -1 || rank === 0) return false;
+      const cur = activeIdxRef.current;
+      const failed = cur !== null ? serversRef.current[cur] : null;
+      if (failed) stopId(failed.id);
+      setManualIdx(`web-${pick}`);
+      setActiveIdx(null);
+      setServerFail(null);
+      setHostFatal(null);
+      setNeedsTap(false);
+      setVideoState("loading");
+      setAutoNote(`All ${serversRef.current.length} torrent servers failed (${why.toLowerCase()}) — switched to the S${serversRef.current.length + pick + 1} · ${WEB_SOURCES[pick].name} web server`);
+      return true;
+    },
+    [stopId]
+  );
+
   /* ---------------- server failed → auto-switch to the next best ----------
    * The player starts on the top-ranked server. When it cannot play, the
    * failure is recorded and the player moves to the next best server in
@@ -271,7 +306,10 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         }
       }
       if (next === -1) {
-        // every server burned — the reason panel is the honest end state
+        // every torrent server burned — hand over to an Ads web server
+        // instead of showing a dead end; the panel only returns if none is
+        // worth opening
+        if (takeoverAds(reason)) return;
         setServerFail(reason);
         setVideoState("error");
         return;
@@ -286,7 +324,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       setActiveIdx(next);
       streamStartRef.current = Date.now();
     },
-    [stopId]
+    [stopId, takeoverAds]
   );
 
   /* ---------------- load servers for this title/episode ---------------- */
@@ -551,9 +589,14 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
           if (j.everConnectedPeers === false) {
             peerlessRef.current.add(activeServer.id);
             if (peerlessRef.current.size >= 2) {
-              setHostFatal(
-                "The streaming backend cannot reach torrent peers — its network is blocking P2P traffic. Try an Ads server below, or retry later."
-              );
+              // the host itself cannot do P2P — no torrent server can ever
+              // play, so hand straight over to an Ads web server and only
+              // show the explanation if that also fails
+              if (!takeoverAds("P2P traffic blocked on the host")) {
+                setHostFatal(
+                  "The streaming backend cannot reach torrent peers — its network is blocking P2P traffic, and no Ads web server is reachable right now. Retry later."
+                );
+              }
               return;
             }
           }
@@ -783,8 +826,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       setAutoNote(null);
   };
 
-  /** open an Ads web server — always a deliberate manual choice, never
-   *  something the player does on its own */
+  /** open an Ads web server — by hand from the strip, or automatically from
+   *  takeoverAds() when every torrent server has failed */
   const selectWeb = (i: number) => {
     if (manualIdx === `web-${i}`) return;
     if (activeServer) stopId(activeServer.id);
@@ -817,7 +860,9 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
     setVideoNonce((n) => n + 1);
   };
 
-  /** amber chip for one Ads web server — used in the strip and the panels */
+  /** amber chip for one Ads web server — numbered into the same S-series as
+   *  the torrent servers (the photo's layout) but kept amber to mark the
+   *  third-party group apart */
   const adsChip = (w: WebSource, i: number) => {
     const h = webHealth[w.id];
     const dot = !h
@@ -845,7 +890,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         }`}
       >
         <Globe className="h-3 w-3" />
-        {w.name}
+        S{servers.length + i + 1} · {w.name}
         <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       </button>
     );
@@ -1021,9 +1066,12 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
           </span>
         )}
 
-        {/* Ads group — third-party web servers, always a manual choice. The
-            dot is a live /api/embed-check probe (green = reachable +
-            embeddable, red = unreachable or framing-restricted). */}
+        {/* Ads group — third-party web servers, numbered into the same
+            S-series as the torrent servers (amber = carries the provider's
+            own ads). The dot is a live /api/embed-check probe (green =
+            reachable + embeddable, red = unreachable or framing-blocked).
+            The first healthy one also takes over automatically when every
+            torrent server fails. */}
         <span className="ml-1 shrink-0 border-l border-white/10 pl-2.5 text-[10px] font-bold uppercase tracking-wider text-amber-500/90">
           Ads · third-party
         </span>
