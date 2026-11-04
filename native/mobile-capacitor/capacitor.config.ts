@@ -20,6 +20,7 @@ const config: CapacitorConfig = {
     androidScheme: "https",
     // navigation stays inside the app; anything else opens the browser
     allowNavigation: ["popcorntime.antideploy.app"],
+    appendUserAgent: "PopcornTime/1.0.5",
   },
   ios: {
     contentInset: "always",

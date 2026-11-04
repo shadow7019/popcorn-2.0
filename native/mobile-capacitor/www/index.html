@@ -6,16 +6,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     html, body { height: 100%; margin: 0; background: #0b0b10; }
-    body { display: grid; place-items: center; }
+    body { display: grid; place-items: center; align-content: center; gap: 14px;
+           font-family: system-ui, -apple-system, sans-serif; }
+    p { color: #a1a1aa; font-size: 13px; margin: 0; }
   </style>
 </head>
 <body>
   <img src="icon.png" alt="PopcornTime" width="96" style="border-radius:22px">
-  <noscript>Open https://pocorntime.antideploy.app</noscript>
+  <p>PopcornTime</p>
+  <noscript>JavaScript is required. Open https://popcorntime.antideploy.app in Safari.</noscript>
   <script>
-    // Capacitor loads server.url (https://pocorntime.antideploy.app); this page only
-    // flashes if the remote host is unreachable at launch.
-    location.replace("https://pocorntime.antideploy.app");
+    // Capacitor loads server.url (https://popcorntime.antideploy.app) directly;
+    // this local page only flashes briefly at startup. The URL below MUST be the
+    // same live domain as capacitor.config — it was "pocorntime" (typo, dead
+    // domain) which broke the fallback path completely.
+    location.replace("https://popcorntime.antideploy.app");
   </script>
 </body>
 </html>

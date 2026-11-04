@@ -1,16 +1,19 @@
 {
-  "appId": "space.popcorntime.app",
-  "appName": "PopcornTime",
-  "webDir": "www",
-  "server": {
-    "url": "https://popcorntime.antideploy.app",
-    "androidScheme": "https",
-    "allowNavigation": ["popcorntime.antideploy.app"]
-  },
-  "ios": {
-    "contentInset": "always"
-  },
-  "android": {
-    "allowMixedContent": false
-  }
+	"appId": "space.popcorntime.app",
+	"appName": "PopcornTime",
+	"webDir": "www",
+	"server": {
+		"url": "https://popcorntime.antideploy.app",
+		"androidScheme": "https",
+		"allowNavigation": [
+			"popcorntime.antideploy.app"
+		],
+		"appendUserAgent": "PopcornTime/1.0.5"
+	},
+	"ios": {
+		"contentInset": "always"
+	},
+	"android": {
+		"allowMixedContent": false
+	}
 }

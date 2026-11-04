@@ -289,6 +289,14 @@ jobs:
       - run: npm run assets
       - run: npx cap sync ios
       - run: cd ios/App && pod install
+      - name: Stamp app version (1.0.5) into Info.plist
+        run: |
+          cd ios/App
+          PLIST="$(ls App/App-Info.plist App/Info.plist 2>/dev/null | head -1)"
+          test -n "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.5" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 5" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
       - name: Archive app unsigned
         run: |
           cd ios/App
@@ -301,19 +309,19 @@ jobs:
           APP_PATH="$(ls -d build/App.xcarchive/Products/Applications/*.app)"
           rm -rf Payload && mkdir Payload
           cp -R "$APP_PATH" Payload/
-          zip -qry PopcornTime-1.0.3-ios-unsigned.ipa Payload
-          unzip -l PopcornTime-1.0.3-ios-unsigned.ipa | head -8
+          zip -qry PopcornTime-1.0.5-ios-unsigned.ipa Payload
+          unzip -l PopcornTime-1.0.5-ios-unsigned.ipa | head -8
       - uses: actions/upload-artifact@v4
         with:
           name: PopcornTime-ios-unsigned-ipa
-          path: native/mobile-capacitor/ios/App/PopcornTime-1.0.3-ios-unsigned.ipa
+          path: native/mobile-capacitor/ios/App/PopcornTime-1.0.5-ios-unsigned.ipa
           if-no-files-found: error
       - name: Attach IPA to v1.0.0 release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           for i in 1 2 3; do
-            gh release upload v1.0.0 "ios/App/PopcornTime-1.0.3-ios-unsigned.ipa" \
+            gh release upload v1.0.0 "ios/App/PopcornTime-1.0.5-ios-unsigned.ipa" \
               --clobber --repo "$GITHUB_REPOSITORY" && exit 0
             echo "upload attempt $i failed; retrying in 20s"; sleep 20
           done

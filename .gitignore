@@ -55,3 +55,6 @@ server.log
 .ssh-deploy/
 core
 .ssh-deploy
+
+# 100MB+ build artifacts live on GitHub Releases, never in git
+**/*.dmg
