@@ -18,6 +18,7 @@ import {
   Play,
   FastForward,
   Globe,
+  Repeat,
 } from "lucide-react";
 import {
   MediaDetails,
@@ -151,6 +152,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   const [serverFail, setServerFail] = useState<string | null>(null);
   /** failure reason per server id — red dots + tooltips on the chips */
   const [failedIds, setFailedIds] = useState<Record<string, string>>({});
+  /** auto-switch notice — shown while the auto-picked server loads */
+  const [autoNote, setAutoNote] = useState<string | null>(null);
   /** automatic re-searches done for the CURRENT episode (reset on ep change) */
   const [autoRetries, setAutoRetries] = useState(0);
 
@@ -183,6 +186,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   videoStateRef.current = videoState;
   const hostFatalRef = useRef(hostFatal);
   hostFatalRef.current = hostFatal;
+  const failedIdsRef = useRef(failedIds);
+  failedIdsRef.current = failedIds;
   const serverFailRef = useRef(serverFail);
   serverFailRef.current = serverFail;
   const streamStartRef = useRef(0);
@@ -237,10 +242,12 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
 
   const serverLabel = useCallback((s: TorrentServer) => `${s.quality} · ${s.provider}`, []);
 
-  /* ---------------- server failed (no auto-switching) ----------------
-   * The player plays exactly the server that is selected — nothing rotates on
-   * its own. When the current server cannot play, record why, stop its
-   * download and surface the reason; the user picks the next server by hand. */
+  /* ---------------- server failed → auto-switch to the next best ----------
+   * The player starts on the top-ranked server. When it cannot play, the
+   * failure is recorded and the player moves to the next best server in
+   * rank order on its own (skipping the ones already burned); a manual
+   * pick that also fails keeps rotating. The reason stays on the chip as a
+   * red dot and the panel only appears when NO server is left to try. */
   const markServerFailed = useCallback(
     (reason: string) => {
       // a host-fatal condition outranks per-server failures — the fatal panel
@@ -248,12 +255,36 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       if (hostFatalRef.current) return;
       const cur = activeIdxRef.current;
       const failed = cur !== null ? serversRef.current[cur] : null;
+      const newFailed = { ...failedIdsRef.current };
       if (failed) {
-        setFailedIds((m) => ({ ...m, [failed.id]: reason }));
+        newFailed[failed.id] = reason;
+        setFailedIds(newFailed);
         stopId(failed.id);
       }
-      setServerFail(reason);
-      setVideoState("error");
+      // next best = the highest-ranked server not yet tried and failed
+      const list = serversRef.current;
+      let next = -1;
+      for (let i = cur !== null ? cur + 1 : 0; i < list.length; i++) {
+        if (!newFailed[list[i].id]) {
+          next = i;
+          break;
+        }
+      }
+      if (next === -1) {
+        // every server burned — the reason panel is the honest end state
+        setServerFail(reason);
+        setVideoState("error");
+        return;
+      }
+      const s = list[next];
+      // reasons carry manual-era instructions ("… — pick another one below");
+      // the note only needs the first clause
+      const why = (failed ? reason : "first attempt failed").split(" — ")[0].toLowerCase();
+      setAutoNote(`Auto-switched to S${next + 1} · ${s.provider} — ${why}`);
+      setServerFail(null);
+      setVideoState("loading");
+      setActiveIdx(next);
+      streamStartRef.current = Date.now();
     },
     [stopId]
   );
@@ -265,6 +296,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
     setServers([]);
     setServersState("loading");
     setServerFail(null);
+      setAutoNote(null);
     serverFailRef.current = null;
     setFailedIds({});
     peerlessRef.current = new Set();
@@ -718,11 +750,13 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       // re-selecting the active server = manual retry
       setVideoState("loading");
       setServerFail(null);
+      setAutoNote(null);
       setVideoNonce((n) => n + 1);
       return;
     }
     setManualIdx(idx);
     setServerFail(null);
+      setAutoNote(null);
     setHostFatal(null);
     setVideoState("loading");
     setActiveIdx(idx);
@@ -746,6 +780,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
     if (activeServer) stopId(activeServer.id);
     setManualIdx("trailer");
     setServerFail(null);
+      setAutoNote(null);
   };
 
   /** open an Ads web server — always a deliberate manual choice, never
@@ -756,6 +791,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
     setManualIdx(`web-${i}`);
     setActiveIdx(null); // stops the torrent stream and the status poll
     setServerFail(null);
+      setAutoNote(null);
     setHostFatal(null);
     setNeedsTap(false);
     setBanner(null);
@@ -766,6 +802,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
     setFailedIds({});
     peerlessRef.current = new Set();
     setServerFail(null);
+      setAutoNote(null);
     serverFailRef.current = null;
     setHostFatal(null);
     setManualIdx(null);
@@ -893,9 +930,16 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         </div>
       </div>
 
-      {/* Server strip — you pick the server; nothing switches by itself.
-          Group 1: ad-free (our own P2P player + direct streams). Group 2:
-          opt-in third-party Ads web servers, clearly separated. */}
+      {/* Server strip — starts on the best-ranked server and auto-switches
+          to the next best one whenever a server fails. Group 1: ad-free
+          (our own P2P player + direct streams). Group 2: opt-in third-party
+          Ads web servers, clearly separated. */}
+      {autoNote && (
+        <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] font-medium text-sky-400 md:px-5">
+          <Repeat className="h-3 w-3 shrink-0" />
+          {autoNote}
+        </div>
+      )}
       <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto px-3 pb-2 md:px-5">
         <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-emerald-500/90">
           Ad-free · ours
@@ -964,7 +1008,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
               >
                 {matchBadge.label}
               </span>
-              <span className="hidden text-[9px] font-normal text-zinc-500 lg:inline">
+              <span className="whitespace-nowrap text-[9px] font-normal text-zinc-500">
                 {s.provider} · 👤{fmtSeeders(s.seeders)}
               </span>
             </button>

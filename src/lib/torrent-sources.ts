@@ -1224,7 +1224,21 @@ function merge(sources: TorrentSource[]): TorrentSource[] {
   // only fall back to unverified (no-year) releases when nothing better exists
   const confident = list.filter((t) => t.match !== "weak");
   const final = confident.length ? confident : list;
-  return final.sort((a, b) => b.score - a.score || b.seeders - a.seeders).slice(0, 14);
+  const ranked = final.sort((a, b) => b.score - a.score || b.seeders - a.seeders);
+  const head = ranked.slice(0, 14);
+  // every provider that answered gets at least one visible chip: the ranked
+  // cap can bury piratebay/1337x rows below 14th place on popular titles,
+  // which reads as "the server is missing" in the player's server strip
+  const seen = new Set(head.map((r) => r.provider));
+  const tail: TorrentSource[] = [];
+  for (const r of ranked.slice(14)) {
+    if (!seen.has(r.provider)) {
+      seen.add(r.provider);
+      tail.push(r);
+    }
+    if (head.length + tail.length >= 24) break;
+  }
+  return tail.length ? [...head, ...tail] : head;
 }
 
 /* ---------- public API ---------- */
