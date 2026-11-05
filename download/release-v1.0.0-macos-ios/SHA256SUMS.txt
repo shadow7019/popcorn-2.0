@@ -1,9 +1,9 @@
 ce3bda6228862da116e4510c971ec1d99e4d7c9485f7edf0ab33ed3954d0fc80  PopcornTime-1.0.0.apk
-20d85234eb2e901b51f15097d79aa4366e38cbd12386f736997f95f7cbc8738d  PopcornTime-1.0.4-macos-universal.dmg
-547886498cd8a8e1e859c71304ca00513cb43acb8118ec9f199ee968514fe517  PopcornTime-1.0.4-macos-universal.zip
-b36b60f210d8207b523a091bf139f029418eff7aa736acf5b0944daf2dd1ee66  PopcornTime-1.0.5-arm64.dmg
-13b0e51217d59ad6d9287c3e2896d24613affe2e9ec5bb075bc6d89b1b586707  PopcornTime-1.0.5-ios-unsigned.ipa
-729d3853c21965c7a326c9056687c5026fa2cf2c850feec1047828b878542665  PopcornTime-1.0.5-x64.dmg
+8c67703f208202cd5bf232f2444c4a71ce8dbe285257d55ce545a1dccb19926a  PopcornTime-1.0.4-macos-universal.dmg
+5fd049422791babfc95a3a26b594c86f220ee5730d12de403d6172be26cd22ca  PopcornTime-1.0.4-macos-universal.zip
+93a4f606af7f7ba81029229f6d750639ff13ec9820151bb5775c0e50b9789bf2  PopcornTime-1.0.5-arm64.dmg
+b8191a5336f754b1b12c3b5bf96ac0f66c03363269ca11a13ee09fab7dc5c775  PopcornTime-1.0.5-ios-unsigned.ipa
+fc7c7df3dc4cade6f9b36e38f98ae928442a910f9eb782e9678bec66312feb96  PopcornTime-1.0.5-x64.dmg
 6fd8033dee4318f35ac0e742d769c6f56f97cdbbdf6835fa60fb008a53f81f58  PopcornTime-Portable-1.0.0.exe
 d86ced3ffb2e6adc92641316021c12771773c72341b06f2a088c4f83c13d2fe6  PopcornTime-Setup-1.0.0.exe
 f1f32601d96cb15aa58cc9e5d602fc22e7419f15fd684c8d28495c218e791e9c  PopcornTime-iOS-1.0.0-Xcode-project.zip
