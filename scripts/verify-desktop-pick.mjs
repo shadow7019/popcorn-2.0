@@ -25,11 +25,19 @@ const openPlayer = async () => {
   await search.click();
   await search.fill("Shawshank");
   const title = page.getByText(/The Shawshank Redemption/i).first();
-  await title.waitFor({ state: "visible", timeout: 45000 });
+  await title.waitFor({ state: "visible", timeout: 90000 });
   await title.click();
   const play = page.locator('button:has-text("Watch Now"), button[aria-label^="Play"]').first();
   await play.waitFor({ state: "visible", timeout: 30000 });
-  await play.click();
+  // the detail modal re-renders while its health polls run — retry through it
+  for (let a = 0; a < 6; a++) {
+    try {
+      await play.click({ timeout: 5000, force: true });
+      break;
+    } catch {
+      await page.waitForTimeout(900);
+    }
+  }
   const box = page.locator('[data-testid="server-box"]');
   await box.waitFor({ state: "visible", timeout: 60000 });
   await box.locator("button").first().click();
@@ -59,6 +67,16 @@ const readRows = async () => {
 try {
   /** the summary bar mirrors the auto-pick: "S<n> · <quality> · <provider> …" */
   const readPick = async () => {
+    try {
+      await page.waitForFunction(
+        () => /S\d+\s*·\s*(2160p|1080p|720p|480p|SD)\s*·/i.test(
+          (document.querySelector('[data-testid="server-box"]')?.textContent ?? "").slice(0, 120)
+        ),
+        { timeout: 15000 }
+      );
+    } catch {
+      /* fall through — the match below reports null */
+    }
     const head = (await page.locator('[data-testid="server-box"]').innerText()).split("\n")[0];
     const m = head.match(/S(\d+)\s*·\s*(2160p|1080p|720p|480p|SD)\s*·\s*([A-Za-z0-9 .]+)/i);
     return m ? { idx: Number(m[1]) - 1, q: m[2].toLowerCase(), provider: m[3].trim() } : null;
@@ -95,7 +113,18 @@ try {
   const r480 = rows.filter((r) => r.q === "480p");
   if (r480.length > 0) {
     const target = rows.findIndex((r) => r.q === "480p");
-    await page.locator('[data-testid="server-box"] button:has(span.font-black)').nth(target).click();
+    // status polls re-render rows while a stream connects — retry through it
+    const rowLoc = page.locator('[data-testid="server-box"] button:has(span.font-black)').nth(target);
+    let clicked = false;
+    for (let a = 0; a < 6 && !clicked; a++) {
+      try {
+        await rowLoc.click({ timeout: 5000, force: true });
+        clicked = true;
+      } catch {
+        await page.waitForTimeout(900);
+      }
+    }
+    if (!clicked) fail(`could not click row ${target} (kept re-rendering)`);
     await page.waitForTimeout(1500);
     await page.goto(BASE, { waitUntil: "domcontentloaded" });
     await openPlayer();
