@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { MediaItem } from "@/lib/tmdb";
 import { Header } from "@/components/streaming/Header";
@@ -69,6 +69,48 @@ export default function Home() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [trailer, detail]);
+
+  // Android hardware back (Capacitor shell): pop the topmost UI layer — the
+  // player returns to the content page beneath it — and only exit the app
+  // when the home view is showing and nothing else can go back. Without this
+  // listener the WebView's default back handling closes the whole app from
+  // inside the player. No-op in plain browsers (no native Capacitor bridge).
+  const layersRef = useRef({ player, trailer, detail, brand, view, query });
+  layersRef.current = { player, trailer, detail, brand, view, query };
+  useEffect(() => {
+    const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } })
+      .Capacitor;
+    if (!cap?.isNativePlatform?.()) return;
+    let disposed = false;
+    let handle: { remove: () => void } | null = null;
+    void import("@capacitor/app")
+      .then(({ App }) =>
+        App.addListener("backButton", (data: { canGoBack: boolean }) => {
+          const l = layersRef.current;
+          if (l.player) setPlayer(null);
+          else if (l.trailer) setTrailer(null);
+          else if (l.detail) setDetail(null);
+          else if (l.brand) setBrand(null);
+          else if (l.view !== "home" || l.query) {
+            navigate("home");
+            setBrand(null);
+          } else if (data.canGoBack) {
+            window.history.back();
+          } else {
+            void App.exitApp();
+          }
+        })
+      )
+      .then((h) => {
+        if (disposed) h?.remove();
+        else handle = h ?? null;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      handle?.remove();
+    };
+  }, [navigate]);
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0b0b10] text-zinc-100">

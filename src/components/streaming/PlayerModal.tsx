@@ -37,6 +37,7 @@ import {
 } from "@/lib/tmdb";
 import { useMediaStore, useMounted } from "@/hooks/use-media-store";
 import { MediaActions } from "./types";
+import { ServerBox } from "./ServerBox";
 
 interface PlayerModalProps {
   target: { item: MediaItem; season?: number; episode?: number } | null;
@@ -50,7 +51,7 @@ interface PlayerModalProps {
  * backend and stream it to the native <video> element — no third-party
  * iframe, therefore no pop-ups, no tab redirects, no injected ads.
  */
-interface TorrentServer {
+export interface TorrentServer {
   id: string;
   releaseName: string;
   seeders: number;
@@ -101,7 +102,7 @@ interface ArchiveMatchClient {
 }
 
 /** live result of probing one web embed server via /api/embed-check */
-interface EmbedHealth {
+export interface EmbedHealth {
   ok: boolean;
   frameable: boolean;
   status: number;
@@ -122,7 +123,6 @@ const fmtSize = (b: number) =>
   b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b > 0 ? `${Math.round(b / 1e3)} KB` : "—";
 const fmtSpeed = (bps: number) =>
   bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} KB/s`;
-const fmtSeeders = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   // remounted per target via key — initial state is safe to derive from props
@@ -359,14 +359,23 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       .then((j: { results?: TorrentServer[] }) => {
         if (cancelled) return;
         const found = Array.isArray(j.results) ? j.results : [];
-        setServers(found);
+        // PopcornRU (the four .link mirrors) is the user-chosen first pick:
+        // it takes S1 and the auto-start, and if its magnets cannot play the
+        // rotation walks the rest in rank order (markServerFailed) and
+        // finally hands over to the Ads web servers.
+        const popcorn = found.filter((s) => s.provider === "PopcornRU");
+        const ordered =
+          popcorn.length > 0
+            ? [...popcorn, ...found.filter((s) => s.provider !== "PopcornRU")]
+            : found;
+        setServers(ordered);
         setServersState("ready");
         // Pre-resolve metadata for the first candidates right now
         // (fire-and-forget). Metadata alone costs 15-90 s on a cold torrent,
         // and paying that while the video element is already waiting is what
         // looks like "stuck on buffering". Warmed, the stream starts
         // delivering the instant it opens — direct-player startup speed.
-        const warmables = found.slice(0, 3).map((s) => ({ id: s.id, dn: s.releaseName }));
+        const warmables = ordered.slice(0, 3).map((s) => ({ id: s.id, dn: s.releaseName }));
         if (warmables.length) {
           fetch("/api/torrent/warm", {
             method: "POST",
@@ -975,108 +984,31 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         </div>
       </div>
 
-      {/* Server strip — starts on the best-ranked server and auto-switches
-          to the next best one whenever a server fails. Group 1: ad-free
-          (our own P2P player + direct streams). Group 2: opt-in third-party
-          Ads web servers, clearly separated. */}
+      {/* Server box — one collapsible panel listing every server, grouped in
+          priority order: PopcornRU (the .link mirrors, preferred first pick),
+          the ad-free Direct stream, the other torrent servers in rank order,
+          and the opt-in third-party Ads web servers. Starts on the
+          best-ranked server and auto-switches to the next one whenever a
+          server fails. */}
       {autoNote && (
         <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] font-medium text-sky-400 md:px-5">
           <Repeat className="h-3 w-3 shrink-0" />
           {autoNote}
         </div>
       )}
-      <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto px-3 pb-2 md:px-5">
-        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-emerald-500/90">
-          Ad-free · ours
-        </span>
-
-        <button
-          type="button"
-          onClick={selectArchive}
-          disabled={archiveState !== "found"}
-          title={
-            archiveState === "found"
-              ? type === "tv"
-                ? "Built-in player, direct episode stream — 100% ad-free"
-                : "Built-in player, direct public-domain stream — 100% ad-free"
-              : archiveState === "loading"
-                ? "Checking archive.org for a direct copy…"
-                : "No direct copy found for this title"
-          }
-          className={`flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
-            isArchive
-              ? "bg-emerald-600 text-white"
-              : archiveState === "found"
-                ? "bg-emerald-600/15 text-emerald-300 ring-1 ring-emerald-600/40 hover:bg-emerald-600/25"
-                : "bg-white/5 text-zinc-600"
-          } ${archiveState !== "found" ? "cursor-not-allowed" : ""}`}
-        >
-          <ShieldCheck className="h-3 w-3" />
-          Direct
-          {archiveState === "loading" && <span className="animate-pulse">…</span>}
-        </button>
-
-        {servers.map((s, i) => {
-          const active = activeIdx === i;
-          const failReason = failedIds[s.id] ?? null;
-          const matchBadge =
-            s.match === "verified"
-              ? { label: "✓", hint: "Release verified for this exact title/episode" }
-              : s.match === "pack"
-                ? { label: "Season pack", hint: "Season pack — the requested episode is picked automatically" }
-                : { label: "unverified", hint: "Could not verify the year/episode in this release name" };
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => selectTorrent(i)}
-              title={`${failReason ? `⚠ Failed earlier: ${failReason}\n` : ""}${s.releaseName}\n${s.seeders} seeders · ${fmtSize(s.sizeBytes)} · ${s.provider}\n${matchBadge.hint}`}
-              className={`flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
-                active
-                  ? "bg-red-600 text-white"
-                  : failReason
-                    ? "bg-white/5 text-zinc-500 hover:bg-white/10"
-                    : "bg-white/8 text-zinc-300 hover:bg-white/15 hover:text-white"
-              }`}
-            >
-              <Magnet className="h-3 w-3" />
-              S{i + 1} · {s.quality}
-              {failReason && <span className="h-1.5 w-1.5 rounded-full bg-red-500" />}
-              <span
-                className={`hidden text-[9px] font-normal md:inline ${
-                  s.match === "verified"
-                    ? "text-emerald-400"
-                    : s.match === "pack"
-                      ? "text-sky-400"
-                      : "text-amber-400"
-                }`}
-              >
-                {matchBadge.label}
-              </span>
-              <span className="whitespace-nowrap text-[9px] font-normal text-zinc-500">
-                {s.provider} · 👤{fmtSeeders(s.seeders)}
-              </span>
-            </button>
-          );
-        })}
-
-        {serversState === "loading" && (
-          <span className="flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-zinc-500">
-            <Loader2 className="h-3 w-3 animate-spin" /> Scanning torrent networks…
-          </span>
-        )}
-
-        {/* Ads group — third-party web servers, numbered into the same
-            S-series as the torrent servers (amber = carries the provider's
-            own ads). The dot is a live /api/embed-check probe (green =
-            reachable + embeddable, red = unreachable or framing-blocked).
-            The first healthy one also takes over automatically when every
-            torrent server fails. */}
-        <span className="ml-1 shrink-0 border-l border-white/10 pl-2.5 text-[10px] font-bold uppercase tracking-wider text-amber-500/90">
-          Ads · third-party
-        </span>
-        {WEB_SOURCES.map((w, i) => adsChip(w, i))}
-      </div>
+      <ServerBox
+        servers={servers}
+        serversState={serversState}
+        activeIdx={activeIdx}
+        activeWebIdx={webSel}
+        archiveActive={isArchive}
+        archiveState={archiveState}
+        onSelectArchive={selectArchive}
+        onSelectTorrent={selectTorrent}
+        onSelectWeb={selectWeb}
+        failedIds={failedIds}
+        webHealth={webHealth}
+      />
 
       {/* every source found is dead — set expectations before playback stalls */}
       {serversState === "ready" && servers.length > 0 && servers.every((s) => s.seeders === 0) && (
@@ -1389,8 +1321,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
                         : "This server couldn't play"}
                     </p>
                     <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-zinc-400">
-                      {serverFail} Nothing switched on its own — pick another server from the
-                      strip above (grey chips failed earlier, fresh ones are bright), or retry:
+                      {serverFail} Nothing switched on its own — open the server box above and
+                      pick another server (red-dotted rows failed earlier), or retry:
                       swarms change by the minute.
                     </p>
                   </div>
@@ -1463,9 +1395,10 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
               <p className="flex items-center gap-2 text-center text-xs text-zinc-600">
                 <Info className="h-3.5 w-3.5 shrink-0" />
                 <span>
-                  <span className="font-semibold text-zinc-400">You pick the server</span> — nothing
-                  switches on its own. <span className="text-emerald-400">Ad-free</span> chips run
-                  on our own player; amber <span className="text-amber-400">Ads</span> chips are
+                  <span className="font-semibold text-zinc-400">You pick the server</span> — the
+                  box lists everything, and failed servers rotate on their own.{" "}
+                  <span className="text-emerald-400">Ad-free</span> servers run on our own
+                  player; amber <span className="text-amber-400">Ads</span> servers are
                   third-party pages that carry the providers&apos; own advertising.
                 </span>
               </p>

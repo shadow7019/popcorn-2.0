@@ -119,6 +119,7 @@ async function firstHost(
 }
 
 const PROBE_ORDER = [
+  "PopcornRU",
   "Torrentio",
   "ThePirateBay",
   "YTS",
@@ -130,6 +131,7 @@ const PROBE_ORDER = [
 ] as const;
 
 const ROLES: Record<(typeof PROBE_ORDER)[number], string> = {
+  PopcornRU: "movies · tv · preferred first pick",
   Torrentio: "movies · tv · anime",
   ThePirateBay: "movies · tv",
   YTS: "movies",
@@ -142,6 +144,26 @@ const ROLES: Record<(typeof PROBE_ORDER)[number], string> = {
 
 async function probe(name: string): Promise<ProbeResult> {
   switch (name) {
+    case "PopcornRU": {
+      // the four .link mirrors back one deployment — probe the Shawshank
+      // magnet map the same way the provider's failover does (first host to
+      // answer wins; a healthy mirror carries magnet rows for it)
+      const body = await fetchWithTimeout(
+        "https://fusme.link/movie/tt0111161",
+        9000,
+        "application/json"
+      );
+      const torrents = (JSON.parse(body).torrents ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      return {
+        results: Object.values(torrents).reduce(
+          (n, q) => n + Object.keys(q ?? {}).length,
+          0
+        ),
+      };
+    }
     case "Torrentio": {
       // popular movie — a healthy Torrentio always carries streams for it
       const body = await fetchWithTimeout(

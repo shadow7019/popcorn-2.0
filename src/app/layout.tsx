@@ -52,6 +52,11 @@ export const viewport: Viewport = {
   themeColor: "#0b0b10",
   width: "device-width",
   initialScale: 1,
+  // app-like phone behavior (APK WebView): no accidental pinch/double-tap
+  // zoom, and the keyboard resizes the page instead of covering controls
+  maximumScale: 1,
+  userScalable: false,
+  interactiveWidget: "resizes-content",
   viewportFit: "cover",
 };
 

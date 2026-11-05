@@ -1379,7 +1379,22 @@ function merge(sources: TorrentSource[]): TorrentSource[] {
   const best = new Map<string, TorrentSource>();
   for (const t of sources) {
     const prev = best.get(t.id);
-    if (!prev || t.seeders > prev.seeders) best.set(t.id, t);
+    if (!prev) {
+      best.set(t.id, t);
+      continue;
+    }
+    // same magnet found by two providers: PopcornRU wins the attribution (it
+    // is the preferred first pick and its mirrors must show up as servers),
+    // but the row keeps the fresher seeder count whichever row carried it
+    const keepNew = t.provider === "PopcornRU" && prev.provider !== "PopcornRU";
+    const keepPrev = prev.provider === "PopcornRU" && t.provider !== "PopcornRU";
+    const win = keepNew ? t : keepPrev ? prev : t.seeders > prev.seeders ? t : prev;
+    const lose = win === t ? prev : t;
+    best.set(t.id, {
+      ...win,
+      seeders: Math.max(win.seeders, lose.seeders),
+      peers: Math.max(win.peers, lose.peers),
+    });
   }
   const list = [...best.values()];
   for (const t of list) {
