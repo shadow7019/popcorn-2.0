@@ -68,6 +68,65 @@ export interface TorrentServer {
   score: number;
 }
 
+/* ---------- desktop-style source selection (popcorn-desktop parity) ----------
+ * The desktop app picks the best quality at or below the user's saved default
+ * (a natural-ordered 480p→2160p ladder, seeds as the health tiebreak), rotates
+ * to the next quality when a torrent dies, and LEARNS the default from every
+ * manual quality choice (AdvSettings default_quality). Same semantics here,
+ * on our flat server list. */
+const QUALITY_RANK: Record<string, number> = {
+  SD: 0,
+  "480p": 1,
+  "720p": 2,
+  "1080p": 3,
+  "2160p": 4,
+};
+
+const defaultQualityKey = (type: string) => `pt-default-quality-${type === "tv" ? "shows" : "movies"}`;
+
+const loadDefaultQuality = (type: string): string => {
+  try {
+    const saved = localStorage.getItem(defaultQualityKey(type));
+    if (saved && saved in QUALITY_RANK) return saved;
+  } catch {
+    /* private mode — fall through to the desktop default */
+  }
+  return "1080p";
+};
+
+const saveDefaultQuality = (type: string, quality: string) => {
+  if (!(quality in QUALITY_RANK)) return;
+  try {
+    localStorage.setItem(defaultQualityKey(type), quality);
+  } catch {
+    /* storage unavailable — the preference just won't persist */
+  }
+};
+
+/** desktop tiebreak inside a quality tier: health (seeders), then provider score */
+const desktopOrder = (rows: TorrentServer[]): TorrentServer[] =>
+  [...rows].sort(
+    (a, b) =>
+      (QUALITY_RANK[b.quality] ?? -1) - (QUALITY_RANK[a.quality] ?? -1) ||
+      b.seeders - a.seeders ||
+      b.score - a.score
+  );
+
+/** best quality ≤ the saved default (falling to the lowest available above
+ *  it, exactly like the desktop's initQuality) — PopcornRU-first is preserved
+ *  because rows are ordered popcorn-group-first before this runs */
+const pickDesktop = (rows: TorrentServer[], preferred: string): TorrentServer | null => {
+  if (rows.length === 0) return null;
+  const pref = QUALITY_RANK[preferred] ?? 3;
+  const below = rows.filter((s) => (QUALITY_RANK[s.quality] ?? -1) <= pref);
+  if (below.length > 0) {
+    const best = Math.max(...below.map((s) => QUALITY_RANK[s.quality] ?? -1));
+    return below.filter((s) => (QUALITY_RANK[s.quality] ?? -1) === best)[0];
+  }
+  const worst = Math.min(...rows.map((s) => QUALITY_RANK[s.quality] ?? 9));
+  return rows.filter((s) => (QUALITY_RANK[s.quality] ?? 9) === worst)[0];
+};
+
 interface TorrentStatus {
   found: boolean;
   ready?: boolean;
@@ -362,12 +421,14 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         // PopcornRU (the four .link mirrors) is the user-chosen first pick:
         // it takes S1 and the auto-start, and if its magnets cannot play the
         // rotation walks the rest in rank order (markServerFailed) and
-        // finally hands over to the Ads web servers.
-        const popcorn = found.filter((s) => s.provider === "PopcornRU");
+        // finally hands over to the Ads web servers. Inside each group the
+        // desktop-app order applies: best quality at-or-below the learned
+        // default first, then health (seeders), then provider score.
+        const popcorn = desktopOrder(found.filter((s) => s.provider === "PopcornRU"));
         const ordered =
           popcorn.length > 0
-            ? [...popcorn, ...found.filter((s) => s.provider !== "PopcornRU")]
-            : found;
+            ? [...popcorn, ...desktopOrder(found.filter((s) => s.provider !== "PopcornRU"))]
+            : desktopOrder(found);
         setServers(ordered);
         setServersState("ready");
         // Pre-resolve metadata for the first candidates right now
@@ -443,18 +504,21 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   }, [target, type]);
 
   /* ---------------- pick the best server to start ----------------
-   * Direct playback: the top-ranked source is selected once and plays as-is.
-   * No automatic failover — if it cannot play, the reason panel opens and the
-   * user picks another server from the strip (they are pre-warmed). */
+   * Desktop-app semantics: the best quality at or below the learned default
+   * wins the auto-start (seeds as health tiebreak), not merely the first row.
+   * No automatic failover beyond the rotation — if it cannot play, the reason
+   * panel opens and the user picks another server from the strip. */
   useEffect(() => {
     if (serversState !== "ready") return;
     if (manualIdx !== null || activeIdx !== null) return;
     if (servers.length > 0) {
-      setActiveIdx(0);
+      const best = pickDesktop(servers, loadDefaultQuality(type));
+      const idx = best ? servers.indexOf(best) : 0;
+      setActiveIdx(idx);
       setVideoState("loading");
       streamStartRef.current = Date.now();
     }
-  }, [serversState, servers, activeIdx, manualIdx]);
+  }, [serversState, servers, activeIdx, manualIdx, type]);
 
   /** <video> onError: the stream request failed. Probe it once — a JSON
    *  error body (storage full / engine unavailable / release too large) is a
@@ -807,6 +871,9 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
       return;
     }
     setManualIdx(idx);
+    // desktop parity: a manual pick is a quality vote — it becomes the new
+    // default the next auto-start obeys
+    if (servers[idx]) saveDefaultQuality(type, servers[idx].quality);
     setServerFail(null);
       setAutoNote(null);
     setHostFatal(null);
