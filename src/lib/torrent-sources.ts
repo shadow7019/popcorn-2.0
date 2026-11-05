@@ -689,6 +689,141 @@ async function providerYts(
   return out;
 }
 
+/* ---------- PopcornRU (popcorn-ru api-fetch mirrors) ---------- */
+
+/**
+ * The popcorn-ru community mirrors — fusme/jfper/uxert/yrkde .link — serve
+ * the legacy popcorn "api-fetch v2" shape: a per-IMDb catalog whose movie
+ * and episode entries carry magnets crawled from public trackers. All four
+ * hosts back the same serv01 deployment, so they are failover mirrors of
+ * ONE provider: the last host that answered is tried alone first (sticky),
+ * and only when it stops responding do all mirrors race for the fastest
+ * answer — the whole provider must still fit the 10s pool deadline. Their
+ * seed/peer counts are stale scrapes (often 0 for swarm-alive magnets), so
+ * trust stays neutral; rows still surface whenever the mainstream indexers
+ * come up empty (regional and catalogue titles).
+ */
+const POPCORN_RU_MIRRORS = [
+  "https://fusme.link",
+  "https://jfper.link",
+  "https://uxert.link",
+  "https://yrkde.link",
+];
+let popcornRuSticky = -1;
+
+interface PopcornRuTorrent {
+  url?: string;
+  title?: string;
+  quality?: string;
+  seed?: number;
+  peer?: number;
+  size?: string | number;
+}
+
+interface PopcornRuDetail {
+  torrents?: unknown;
+  episodes?: { season?: number; episode?: number; torrents?: unknown }[];
+}
+
+/** Magnet rows hide at either depth: movies nest language → quality →
+ *  entry, show episodes go quality → entry directly. Walk both. */
+function popcornRuRows(
+  node: unknown,
+  depth = 0
+): { magnet: string; t: PopcornRuTorrent }[] {
+  const out: { magnet: string; t: PopcornRuTorrent }[] = [];
+  if (!node || typeof node !== "object" || depth > 2) return out;
+  for (const v of Object.values(node as Record<string, unknown>)) {
+    if (!v || typeof v !== "object") continue;
+    const rec = v as PopcornRuTorrent;
+    if (typeof rec.url === "string" && rec.url.startsWith("magnet:?")) {
+      out.push({ magnet: rec.url, t: rec });
+    } else {
+      out.push(...popcornRuRows(v, depth + 1));
+    }
+  }
+  return out;
+}
+
+async function popcornRuDetail(path: string): Promise<PopcornRuDetail | null> {
+  const grab = (i: number) =>
+    pacedJson<PopcornRuDetail>(POPCORN_RU_MIRRORS[i] + path, 6000).then((d) => {
+      if (!d) throw new Error("empty");
+      popcornRuSticky = i;
+      return d;
+    });
+  if (popcornRuSticky >= 0) {
+    try {
+      return await grab(popcornRuSticky);
+    } catch {
+      /* sticky mirror stopped answering — race them all */
+    }
+  }
+  try {
+    return await Promise.any(POPCORN_RU_MIRRORS.map((_, i) => grab(i)));
+  } catch {
+    return null;
+  }
+}
+
+async function providerPopcornRu(
+  type: "movie" | "tv",
+  imdbId: string,
+  ctx: BayContext,
+  year: string
+): Promise<TorrentSource[]> {
+  const path = type === "movie" ? `/movie/${imdbId}` : `/show/${imdbId}`;
+  const detail = await popcornRuDetail(path);
+  if (!detail) return [];
+  let rows: { magnet: string; t: PopcornRuTorrent }[] = [];
+  if (type === "movie") {
+    rows = popcornRuRows(detail.torrents);
+  } else {
+    const ep = (detail.episodes ?? []).find(
+      (e) => e.season === ctx.season && e.episode === ctx.episode
+    );
+    rows = popcornRuRows(ep?.torrents);
+  }
+  const out: TorrentSource[] = [];
+  for (const { magnet, t } of rows) {
+    // the DB stores HTML-escaped magnets ("&amp;dn=") — unescape before
+    // parsing, or the hash/dn splits silently produce garbage
+    const clean = magnet.replace(/&amp;/g, "&");
+    const hash = clean.match(/xt=urn:btih:([0-9a-fA-F]{40})/)?.[1];
+    if (!hash) continue;
+    const dn = clean.match(/[?&]dn=([^&]+)/)?.[1];
+    const releaseName =
+      (dn ? decodeURIComponent(dn.replace(/\+/g, " ")) : "") ||
+      t.title?.trim() ||
+      "PopcornRU release";
+    const parsed = parseRelease(releaseName);
+    if (!sanityOk(parsed, type, year, ctx.season, ctx.episode)) continue;
+    const match =
+      type === "tv"
+        ? matchTv(parsed, ctx.season, ctx.episode, ctx.title, ctx.originalTitle, {
+            airDate: ctx.airDate ?? null,
+            showLang: ctx.showLang ?? null,
+            absEpisode: ctx.absEpisode ?? null,
+            relEpisode: ctx.relEpisode ?? null,
+          })
+        : matchMovie(parsed, ctx.title, ctx.originalTitle, ctx.year);
+    if (!match) continue;
+    out.push({
+      id: hash.toLowerCase(),
+      releaseName,
+      seeders: Number(t.seed) || 0,
+      peers: Number(t.peer) || 0,
+      sizeBytes: Number(t.size) || 0,
+      provider: "PopcornRU",
+      quality: t.quality || detectQuality(releaseName),
+      fileIdx: null,
+      match,
+      score: 0,
+    });
+  }
+  return out;
+}
+
 /* ---------- knaben (aggregator over 1337x, TorrentGalaxy, TPB …) ---------- */
 
 interface KnabenRow {
@@ -1234,6 +1369,9 @@ const PROVIDER_TRUST: Record<string, number> = {
   YTS: 2,
   SolidTorrents: 1,
   TorrentsCSV: 0,
+  // IMDb-keyed crawl of public trackers; seed counts are stale (often 0 for
+  // swarm-alive magnets) — neutral trust, it wins only where others are empty
+  PopcornRU: 0,
   BitSearch: -3,
 };
 
@@ -1412,6 +1550,9 @@ export async function searchTorrentSources(
       run: () => providerTorrentio(type, imdbId, bayCtx, year, airDate),
     });
     jobs.push({ name: "YTS", run: () => providerYts(type, imdbId, bayCtx) });
+    // popcorn-ru mirrors: per-IMDb magnet maps crawled from public trackers —
+    // often the only source for regional/catalogue titles the bays miss
+    jobs.push({ name: "PopcornRU", run: () => providerPopcornRu(type, imdbId, bayCtx, year) });
   }
 
   // every provider is independent: one being down (CF wall, DNS block, rate
