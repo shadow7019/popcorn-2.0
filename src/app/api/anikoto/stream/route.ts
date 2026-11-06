@@ -1,39 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
+import { signProxyUrl, verifyProxyUrl, isPublicHttpsUrl } from "@/lib/anikoto-proxy";
 
 /**
- * Anikoto HLS proxy — the megaplay CDN (fetch.nexabloom.top) answers 403
- * unless the request carries Referer https://megaplay.buzz/ , which browsers
- * on our origin cannot send cross-origin. The server fetches playlists and
- * segments with that referer, rewrites playlist URIs back through this
- * route, and streams segments through untouched (Range included).
+ * Anikoto HLS proxy — the megaplay CDN answers 403 unless the request
+ * carries Referer https://megaplay.buzz/ , which browsers on our origin
+ * cannot send cross-origin. The server fetches playlists and segments with
+ * that referer, rewrites playlist URIs back through this route (signed —
+ * see anikoto-proxy.ts; CDN hosts rotate, so the signature is the
+ * capability, not a host list), and streams segments through untouched
+ * (Range included).
  *
- * ?u= base64url of the upstream URL; host allowlisted, nothing else passes.
+ * ?u= base64url of the upstream URL · ?s= its signature
  */
 
 export const dynamic = "force-dynamic";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const ALLOWED = [
-  /^https:\/\/fetch\.nexabloom\.top\//,
-  /^https:\/\/[a-z0-9.]*\.?mysubsplay\.com\//,
-];
 
-function decode(urlParam: string): URL | null {
+function decode(urlParam: string, sig: string | null): URL | null {
   try {
-    const u = new URL(Buffer.from(urlParam, "base64url").toString("utf8"));
-    if (u.protocol !== "https:") return null;
-    if (!ALLOWED.some((re) => re.test(u.href))) return null;
-    return u;
+    const raw = Buffer.from(urlParam, "base64url").toString("utf8");
+    if (!isPublicHttpsUrl(raw)) return null;
+    if (!sig || !verifyProxyUrl(raw, sig)) return null;
+    return new URL(raw);
   } catch {
     return null;
   }
 }
 
-/** absolute-ize a playlist URI and route it back through this proxy */
+/** absolute-ize a playlist URI and route it back through this proxy, signed */
 function proxied(uri: string, base: URL): string {
   const abs = new URL(uri, base).href;
-  return `/api/anikoto/stream?u=${Buffer.from(abs).toString("base64url")}`;
+  return `/api/anikoto/stream?u=${Buffer.from(abs).toString("base64url")}&s=${signProxyUrl(abs)}`;
 }
 
 async function upstream(u: URL, range: string | null) {
@@ -49,8 +48,11 @@ async function upstream(u: URL, range: string | null) {
 }
 
 export async function GET(req: NextRequest) {
-  const u = decode(req.nextUrl.searchParams.get("u") ?? "");
-  if (!u) return new NextResponse("bad or disallowed url", { status: 400 });
+  const u = decode(
+    req.nextUrl.searchParams.get("u") ?? "",
+    req.nextUrl.searchParams.get("s")
+  );
+  if (!u) return new NextResponse("bad or untrusted url", { status: 400 });
   const range = req.headers.get("range");
 
   let r: Response;

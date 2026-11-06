@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { signProxyUrl } from "@/lib/anikoto-proxy";
 
 /**
  * Anikoto (anikotoapi.site) — free anime API the user found, serving a fresh
@@ -157,6 +158,12 @@ async function extractMaster(embedUrl: string): Promise<string | null> {
   });
 }
 
+/** the player-facing proxy URL for a verified upstream playlist (signed —
+ *  see anikoto-proxy.ts; segment hosts rotate, the signature is the pass) */
+function proxyUrl(upstreamUrl: string): string {
+  return `/api/anikoto/stream?u=${Buffer.from(upstreamUrl).toString("base64url")}&s=${signProxyUrl(upstreamUrl)}`;
+}
+
 /** season marker in an Anikoto title: "… II" / "… 2nd Season" / "… Season 2" / "… Part 2" */
 function seasonOf(title: string): number | null {
   const m = norm(title).match(/(?:\d+(?:st|nd|rd|th) |season |part )(\d+)$/) ?? norm(title).match(/ (ii|iii|iv|v)$/);
@@ -211,7 +218,7 @@ export async function GET(req: NextRequest) {
           fileIdx: null,
           match: "verified" as const,
           lang,
-          hls: `/api/anikoto/stream?u=${Buffer.from(master).toString("base64url")}`,
+          hls: proxyUrl(master),
           score: 100,
         };
       })
