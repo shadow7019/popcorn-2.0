@@ -53,7 +53,10 @@ export async function GET(req: NextRequest) {
     req.nextUrl.searchParams.get("s")
   );
   if (!u) return new NextResponse("bad or untrusted url", { status: 400 });
-  const range = req.headers.get("range");
+  const isPlaylist = /\.m3u8?$/i.test(u.pathname);
+  // playlists must come back complete — a Range header (whatever adds it)
+  // turns them into a 206 partial body that hls.js rejects as fatal
+  const range = isPlaylist ? null : req.headers.get("range");
 
   let r: Response;
   try {
@@ -76,7 +79,7 @@ export async function GET(req: NextRequest) {
       })
       .join("\n");
     return new NextResponse(body, {
-      status: r.status,
+      status: 200,
       headers: {
         "Content-Type": "application/vnd.apple.mpegurl",
         "Cache-Control": "no-store",
