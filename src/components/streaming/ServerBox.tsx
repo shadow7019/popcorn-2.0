@@ -22,6 +22,9 @@ interface BoxTorrentServer {
   provider: string;
   quality: string;
   match: "verified" | "pack" | "weak";
+  /** Anikoto HLS rows — plays through our referer proxy, not the engine */
+  hls?: string;
+  lang?: "sub" | "dub";
 }
 
 interface EmbedHealth {
@@ -99,9 +102,16 @@ export function ServerBox({
     () => servers.map((s, i) => (s.provider === "PopcornRU" ? i : -1)).filter((i) => i >= 0),
     [servers]
   );
+  const anikotoIdx = useMemo(
+    () => servers.map((s, i) => (s.provider === "Anikoto" ? i : -1)).filter((i) => i >= 0),
+    [servers]
+  );
   const otherIdx = useMemo(
-    () => servers.map((_, i) => i).filter((i) => !popcornIdx.includes(i)),
-    [servers, popcornIdx]
+    () =>
+      servers
+        .map((_, i) => i)
+        .filter((i) => !popcornIdx.includes(i) && !anikotoIdx.includes(i)),
+    [servers, popcornIdx, anikotoIdx]
   );
   const totalServers =
     servers.length + WEB_SOURCES.length + (archiveState === "found" ? 1 : 0);
@@ -152,16 +162,24 @@ export function ServerBox({
                 preferred
               </span>
             )}
-            <span className={`hidden shrink-0 text-[9px] font-normal sm:inline ${mb.cls}`}>
-              {mb.label}
-            </span>
+            {s.hls ? (
+              <span className="shrink-0 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-sky-400">
+                {s.lang ?? "hls"}
+              </span>
+            ) : (
+              <span className={`hidden shrink-0 text-[9px] font-normal sm:inline ${mb.cls}`}>
+                {mb.label}
+              </span>
+            )}
           </span>
           <span
             className={`block truncate text-[11px] ${failReason ? "text-red-400" : "text-zinc-500"}`}
           >
             {failReason
               ? `Failed: ${failReason}`
-              : `${s.releaseName} · 👤${fmtSeeders(s.seeders)} · ${fmtSize(s.sizeBytes)}`}
+              : s.hls
+                ? `${s.releaseName} · HLS direct · no ads`
+                : `${s.releaseName} · 👤${fmtSeeders(s.seeders)} · ${fmtSize(s.sizeBytes)}`}
           </span>
         </span>
         {active ? (
@@ -264,6 +282,17 @@ export function ServerBox({
             <div className="px-3 py-3 text-xs text-red-300">
               The server scan failed — close and reopen the player, or check your connection.
             </div>
+          )}
+
+          {anikotoIdx.length > 0 && (
+            <>
+              <GroupHeader
+                text="Anikoto · HLS"
+                cls="text-sky-400"
+                hint="fresh anime streams — sub & dub, instant start, no ads"
+              />
+              {anikotoIdx.map((i) => torrentRow(i, false))}
+            </>
           )}
 
           {popcornIdx.length > 0 && (

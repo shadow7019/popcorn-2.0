@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import {
   X,
   ChevronLeft,
@@ -66,6 +67,10 @@ export interface TorrentServer {
   /** verified = exact title/episode match · pack = season pack (right file auto-picked) · weak = title-only match */
   match: "verified" | "pack" | "weak";
   score: number;
+  /** Anikoto HLS rows: proxy URL of the m3u8 master — plays via hls.js, not
+   *  the torrent engine (no status poll, no stop call, no seeds/size) */
+  hls?: string;
+  lang?: "sub" | "dub";
 }
 
 /* ---------- desktop-style source selection (popcorn-desktop parity) ----------
@@ -125,6 +130,23 @@ const pickDesktop = (rows: TorrentServer[], preferred: string): TorrentServer | 
   }
   const worst = Math.min(...rows.map((s) => QUALITY_RANK[s.quality] ?? 9));
   return rows.filter((s) => (QUALITY_RANK[s.quality] ?? 9) === worst)[0];
+};
+
+/** where Anikoto HLS rows sit relative to the torrent rows: they take the
+ *  wheel while the player is undecided (an instant native start beats
+ *  waiting out torrent metadata) and slot in right after PopcornRU once a
+ *  torrent is already playing — either way PopcornRU stays the first
+ *  torrent choice. Runs inside setServers updaters, so BOTH arrival orders
+ *  (anikoto first or torrents first) converge on the same layout. */
+const mergeAnikoto = (
+  base: TorrentServer[],
+  anikoto: TorrentServer[],
+  undecided: boolean
+): TorrentServer[] => {
+  if (anikoto.length === 0) return base;
+  const popcorn = base.filter((s) => s.provider === "PopcornRU");
+  const others = base.filter((s) => s.provider !== "PopcornRU" && s.provider !== "Anikoto");
+  return undecided ? [...anikoto, ...popcorn, ...others] : [...popcorn, ...anikoto, ...others];
 };
 
 interface TorrentStatus {
@@ -261,6 +283,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   /** servers that already burned their full no-peer window while the host
    *  reported zero peers ever — 2 distinct ones ⇒ P2P is blocked host-wide */
   const peerlessRef = useRef<Set<string>>(new Set());
+  /** active hls.js instance for Anikoto rows (destroyed on switch/unmount) */
+  const hlsRef = useRef<Hls | null>(null);
 
   // When the browser blocks autoplay we surface a tap-to-play overlay instead
   // of a stuck black frame (video data is already buffered at that point).
@@ -424,12 +448,20 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
         // finally hands over to the Ads web servers. Inside each group the
         // desktop-app order applies: best quality at-or-below the learned
         // default first, then health (seeders), then provider score.
+        // Anikoto rows that already arrived from the parallel anime fetch
+        // are re-placed around this list instead of being wiped by it.
         const popcorn = desktopOrder(found.filter((s) => s.provider === "PopcornRU"));
         const ordered =
           popcorn.length > 0
             ? [...popcorn, ...desktopOrder(found.filter((s) => s.provider !== "PopcornRU"))]
             : desktopOrder(found);
-        setServers(ordered);
+        setServers((prev) =>
+          mergeAnikoto(
+            ordered,
+            prev.filter((s) => s.provider === "Anikoto"),
+            activeIdx === null && manualIdx === null
+          )
+        );
         setServersState("ready");
         // Pre-resolve metadata for the first candidates right now
         // (fire-and-forget). Metadata alone costs 15-90 s on a cold torrent,
@@ -476,6 +508,44 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   useEffect(() => {
     setAutoRetries(0);
   }, [target, type, season, episode]);
+
+  /* ---------------- Anikoto HLS rows (anime only) ----------------
+   * The fresh-anime API the user chose: catalog rows are updated daily and
+   * airing seasonals carry their latest episode the day it drops. Each
+   * returned row was verified server-side (playlist answers 200) and plays
+   * natively through our referer proxy — no third-party iframe, no ads.
+   * While the player is still undecided the HLS rows take the wheel (an
+   * instant native start beats waiting out torrent metadata); once a
+   * torrent is already playing they slot in after PopcornRU instead. */
+  const anikotoEligible = type === "tv" && episode > 0 && !!target?.item.genre_ids?.includes(16);
+  useEffect(() => {
+    if (!target || !anikotoEligible) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      title: getTitle(target.item),
+      season: String(season),
+      episode: String(episode),
+    });
+    fetch(`/api/anikoto/search?${params.toString()}`)
+      .then((r) => r.json())
+      .then((j: { results?: TorrentServer[] }) => {
+        if (cancelled) return;
+        const rows = (Array.isArray(j.results) ? j.results : []).filter(
+          (s) => s.provider === "Anikoto" && s.hls
+        );
+        setServers((prev) =>
+          mergeAnikoto(
+            prev.filter((s) => s.provider !== "Anikoto"),
+            rows,
+            activeIdx === null && manualIdx === null
+          )
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [target, season, episode, searchNonce, anikotoEligible, activeIdx, manualIdx]);
 
   /* ---------------- ads server health (probe once per open) ----------------
    * Each Ads chip gets a live dot: green = answers + allows embedding, red =
@@ -566,6 +636,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   /* ---------------- stream URL ---------------- */
   const streamUrl = useMemo(() => {
     if (!activeServer || !target) return null;
+    // Anikoto HLS row: the proxy URL is the stream — no torrent engine
+    if (activeServer.hls) return activeServer.hls;
     const file = activeServer.fileIdx != null ? `&file=${activeServer.fileIdx}` : "";
     // season/episode steer file selection inside season packs and year
     // steers multi-year movie collections — so the exact requested content
@@ -592,6 +664,12 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
   /* ---------------- live status + watchdog (reports, never switches) ---------------- */
   useEffect(() => {
     if (!streamUrl || !activeServer) {
+      setStatus(null);
+      return;
+    }
+    // HLS rows stream straight from our proxy — the torrent status poll and
+    // its stall/no-peer watchdogs are engine concepts that do not apply
+    if (activeServer.hls) {
       setStatus(null);
       return;
     }
@@ -696,15 +774,50 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
 
   /* ---------------- stop torrents on switch / unmount ---------------- */
   useEffect(() => {
-    const id = activeServer?.id ?? null;
+    const id = activeServer?.hls ? null : (activeServer?.id ?? null);
     if (currentIdRef.current && currentIdRef.current !== id) stopId(currentIdRef.current);
     currentIdRef.current = id;
-  }, [activeServer?.id, stopId]);
+  }, [activeServer, stopId]);
   useEffect(() => {
     return () => {
       if (currentIdRef.current) stopId(currentIdRef.current);
     };
   }, [stopId]);
+
+  /* ---------------- HLS attach (Anikoto rows) ----------------
+   * Chrome/Firefox need hls.js for the m3u8 master; Safari plays it
+   * natively. A fatal HLS error funnels into the same probe/rotation path
+   * as a failed torrent stream. */
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !streamUrl) return;
+    if (!activeServer?.hls) return;
+    let hls: Hls | null = null;
+    if (v.canPlayType("application/vnd.apple.mpegurl")) {
+      v.src = streamUrl;
+      v.play().catch(() => {});
+    } else if (Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
+      hlsRef.current = hls;
+      hls.loadSource(streamUrl);
+      hls.attachMedia(v);
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (!data.fatal) return;
+        setVideoState("error");
+        handleStreamError();
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+    } else {
+      setHostFatal("This browser cannot play HLS streams");
+    }
+    return () => {
+      hls?.destroy();
+      hlsRef.current = null;
+      v.removeAttribute("src");
+      v.load();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamUrl, videoNonce, activeServer?.hls]);
 
   /* ---------------- record progress for Continue Watching ---------------- */
   useEffect(() => {
@@ -1164,7 +1277,7 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
                   <video
                     ref={videoRef}
                     key={videoKey}
-                    src={streamUrl}
+                    src={!activeServer?.hls ? streamUrl : undefined}
                     poster={img(item.backdrop_path, "w1280") ?? undefined}
                     controls
                     autoPlay
@@ -1179,7 +1292,8 @@ export function PlayerModal({ target, actions, onClose }: PlayerModalProps) {
                     className="h-full w-full bg-black"
                   />
                   <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-emerald-600/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
-                    <ShieldCheck className="h-3 w-3" /> Ad-free · P2P direct
+                    <ShieldCheck className="h-3 w-3" />{" "}
+                    {activeServer?.hls ? "Ad-free · Anikoto HLS" : "Ad-free · P2P direct"}
                   </div>
                   {videoState === "playing" && downloading && (
                     <div className="absolute bottom-2 left-3 flex items-center gap-2 rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-semibold text-zinc-200 backdrop-blur">
